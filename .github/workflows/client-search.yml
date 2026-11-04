@@ -1,5 +1,6 @@
 # Поиск клиентов 24/7: задача работает ~5 ч 45 мин, потом сама завершается.
 # Расписание запускает новую каждый час: пока идёт старая, новая ждёт в очереди и стартует сразу после неё.
+# Отложенный старт: пока не наступило время из переменной репозитория START_AFTER, задача сразу завершается.
 name: client-search
 
 on:
@@ -16,18 +17,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 358
     steps:
+      - name: Gate (отложенный старт)
+        id: gate
+        env:
+          START_AFTER: ${{ vars.START_AFTER }}
+        run: |
+          if [ -n "$START_AFTER" ] && [ "$(date -u +%s)" -lt "$(date -u -d "$START_AFTER" +%s)" ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"; echo "Рано: старт после $START_AFTER"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.11"
 
       - name: Install
+        if: steps.gate.outputs.go == 'true'
         run: |
           pip install -q playwright
           python -m playwright install --with-deps chromium
 
       - name: Restore state
+        if: steps.gate.outputs.go == 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -39,6 +55,7 @@ jobs:
           restore-keys: state-
 
       - name: Run
+        if: steps.gate.outputs.go == 'true'
         env:
           CLOUD: "1"
           TZ: Europe/Moscow
@@ -55,7 +72,7 @@ jobs:
         run: python cloud_run.py
 
       - name: Save state
-        if: always()
+        if: always() && steps.gate.outputs.go == 'true'
         uses: actions/cache/save@v4
         with:
           path: |
