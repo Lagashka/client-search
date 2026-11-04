@@ -23,7 +23,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install
-        run: pip install -q telethon==1.45.0
+        run: |
+          pip install -q playwright
+          python -m playwright install --with-deps chromium
 
       - name: Restore state
         uses: actions/cache/restore@v4
@@ -41,10 +43,15 @@ jobs:
           CLOUD: "1"
           TZ: Europe/Moscow
           PYTHONIOENCODING: utf-8
-          TG_API_ID: ${{ secrets.TG_API_ID }}
-          TG_API_HASH: ${{ secrets.TG_API_HASH }}
-          TG_SESSION: ${{ secrets.TG_SESSION }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          WEB_STATE_0: ${{ secrets.WEB_STATE_0 }}
+          WEB_STATE_1: ${{ secrets.WEB_STATE_1 }}
+          WEB_STATE_2: ${{ secrets.WEB_STATE_2 }}
+          WEB_STATE_3: ${{ secrets.WEB_STATE_3 }}
+          WEB_STATE_4: ${{ secrets.WEB_STATE_4 }}
+          WEB_STATE_5: ${{ secrets.WEB_STATE_5 }}
+          WEB_STATE_6: ${{ secrets.WEB_STATE_6 }}
+          WEB_STATE_7: ${{ secrets.WEB_STATE_7 }}
         run: python cloud_run.py
 
       - name: Save state
