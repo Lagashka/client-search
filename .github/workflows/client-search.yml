@@ -1,0 +1,59 @@
+# Поиск клиентов 24/7: задача работает ~5 ч 45 мин, потом сама завершается.
+# Расписание запускает новую каждый час: пока идёт старая, новая ждёт в очереди и стартует сразу после неё.
+name: client-search
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: client-search
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -q telethon==1.45.0
+
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state.json
+            settings.json
+            bot-control.json
+            log.txt
+          key: state-latest
+          restore-keys: state-
+
+      - name: Run
+        env:
+          CLOUD: "1"
+          TZ: Europe/Moscow
+          PYTHONIOENCODING: utf-8
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python cloud_run.py
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state.json
+            settings.json
+            bot-control.json
+            log.txt
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
