@@ -601,26 +601,35 @@ class Web:
     SEARCH = "#column-left input.input-search-input"
 
     def __init__(self):
-        self.pw = self.ctx = self.page = None
+        self.pw = self.ctx = self.page = self.browser = None
 
     def start(self):
         from playwright.sync_api import sync_playwright
         self.close()
         self.pw = sync_playwright().start()
-        self.ctx = self.pw.chromium.launch_persistent_context(PROFILE, headless=not SHOW, viewport={"width": 1280, "height": 1000})
-        self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        state_file = os.environ.get("WEB_STATE_FILE")
+        if CLOUD and state_file and os.path.exists(state_file):
+            # облако: чистый браузер + сессия Telegram Web из секретов GitHub (без папки профиля)
+            self.browser = self.pw.chromium.launch(headless=True)
+            self.ctx = self.browser.new_context(storage_state=state_file, viewport={"width": 1280, "height": 1000},
+                                                locale="en-US")
+            self.page = self.ctx.new_page()
+        else:
+            self.ctx = self.pw.chromium.launch_persistent_context(PROFILE, headless=not SHOW, viewport={"width": 1280, "height": 1000})
+            self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         self.page.goto("https://web.telegram.org/k/", timeout=90000)
         self.wait_login()
         time.sleep(3)
 
     def close(self):
-        try:
-            if self.ctx: self.ctx.close()
-        except Exception: pass
+        for x in (self.ctx, self.browser):
+            try:
+                if x: x.close()
+            except Exception: pass
         try:
             if self.pw: self.pw.stop()
         except Exception: pass
-        self.ctx = self.pw = self.page = None
+        self.ctx = self.pw = self.page = self.browser = None
 
     def logged(self):
         p = self.page
@@ -638,6 +647,10 @@ class Web:
             time.sleep(1)
         if self.logged():
             log("Telegram Web: вход есть"); return
+        if CLOUD:           # в облаке показать QR некому: сессию надо перенести заново
+            notify("⚠️ Облако: Telegram не принял сохранённый вход (сессию отозвали или она устарела). "
+                   "Запусти на ПК «2 Перенести вход в облако.bat» ещё раз — отправка до тех пор остановлена.")
+            raise SystemExit(2)
         qr_html = os.path.join(BASE, "qr.html")
         with open(qr_html, "w", encoding="utf-8") as f:
             f.write('<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="4"></head>'
@@ -1035,7 +1048,14 @@ def main():
         nonlocal web
         if DRY: return None
         if web is None or web.page is None:
-            web = Web() if not CLOUD else __import__("cloud_tg").TgCloud(Limited)
+            if not CLOUD:
+                web = Web()
+            elif os.environ.get("WEB_STATE_FILE"):          # основной облачный режим: Telegram Web в Chromium
+                cloud_tg = __import__("cloud_tg")
+                web = type("WebCloud", (Web, cloud_tg.BotLink), {})()
+                web.init_bot()
+            else:                                           # запасной: Telethon (нужны api_id/api_hash)
+                web = __import__("cloud_tg").TgCloud(Limited)
             while True:
                 try: web.start(); break
                 except Exception as e:
