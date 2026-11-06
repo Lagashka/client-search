@@ -256,7 +256,13 @@ def notify(text, buttons=None, silent=False):
         log("бот не отправил уведомление:", str(e)[:80])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import crm, autoreply, guard
+import crm, autoreply, guard, zlib
+
+# Команда из двух аккаунтов (Егор и Саша) делит контакты пополам, чтобы один человек не получил два письма.
+# CONTACTS_PART = "0" или "1" (у Егора в облаке "0", у Саши "1"); пусто — пишем всем.
+CONTACTS_PART = os.environ.get("CONTACTS_PART", "").strip()
+def mine(u):
+    return CONTACTS_PART not in ("0", "1") or zlib.crc32(u.lower().encode()) % 2 == int(CONTACTS_PART)
 
 def bot_token():
     global _BOT
@@ -1215,7 +1221,7 @@ def main():
                         why = guard.no_dm(post["text"])
                         if why: log(f"пропуск вакансии {post['id']}: {why}"); continue
                         allc = hot_contacts(post, chn)
-                        cands = [u for u in allc if u.lower() not in contacted and u.lower() not in bad
+                        cands = [u for u in allc if u.lower() not in contacted and u.lower() not in bad and mine(u)
                                  and not guard.contact_problem(post["text"], u, post["links"])]
                         target = None
                         for u in cands:
@@ -1418,7 +1424,8 @@ def main():
                         save()
                     else:
                         q = st["hot_q"] if kind == "hot" else st["cold_q"]
-                        risk = guard.check_before_send(kind, item)       # последняя проверка: тот ли человек и не против ли он
+                        risk = "" if mine(item["username"]) else "контакт второй половины команды"
+                        risk = risk or guard.check_before_send(kind, item)   # последняя проверка: тот ли человек и не против ли он
                         if risk:
                             q.pop(0); bad.add(item["username"].lower())
                             log(f"НЕ ПИШУ @{item['username']}: {risk}"); save()
@@ -1497,7 +1504,7 @@ def main():
                             if niche and fresh and SUBS_RANGE[0] <= ch["subs"] <= SUBS_RANGE[1] and is_expert_channel(ch):
                                 for u in find_contacts(ch):
                                     ul = u.lower()
-                                    if ul in contacted or ul in bad: continue
+                                    if ul in contacted or ul in bad or not mine(u): continue
                                     dn = user_page(u); time.sleep(random.uniform(1, 2))
                                     if dn is None: bad.add(ul); continue
                                     v = pick_variant(st)
