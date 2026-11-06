@@ -69,6 +69,7 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         env:
           CLOUD: "1"
+          CONTACTS_PART: "0"          # половина контактов Егора; у Саши "1"
           TZ: Europe/Moscow
           PYTHONIOENCODING: utf-8
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
