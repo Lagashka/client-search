@@ -8,7 +8,16 @@ import os, re, sys, json, time, datetime, subprocess, urllib.request, urllib.err
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(BASE))
-BOTFILE = os.path.join(ROOT, ".telegram-bot.txt")
+def _find_botfile():
+    """Токен бота: ищется рядом с папкой и в «05 Доступы и служебное» (после наведения порядка 05.11)."""
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(5):
+        for cand in (os.path.join(d, ".telegram-bot.txt"), os.path.join(d, "05 Доступы и служебное", ".telegram-bot.txt")):
+            if os.path.exists(cand):
+                return cand
+        d = os.path.dirname(d)
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".telegram-bot.txt")
+BOTFILE = _find_botfile()
 CFG = os.path.join(BASE, "bot-control.json")
 MYLOCK = os.path.join(BASE, "bot-control.lock")
 SEARCH_LOCK = os.path.join(BASE, "running.lock")
@@ -414,6 +423,28 @@ def process_update(ctl, u):
     clog("команда:", (m.get("text") or "")[:60])
     handle_text(ctl, m.get("text"))
 
+REMINDERS = [
+    {"id": "cloud-start-2026-11-05", "at": "2026-11-05T15:00:00+03:00",
+     "text": ("⏰ 15:00 — пора запускать облако, ограничение аккаунта уже снято.\n\n"
+              "1️⃣ Запусти 02 Клиенты и продажи\\Автопоиск клиентов (telegram)\\cloud\\2 Перенести вход в облако.bat и отсканируй QR "
+              "(Telegram → Настройки → Устройства → Подключить устройство). Попросит облачный пароль — введи в окне браузера.\n"
+              "2️⃣ Дождись слова «Готово», затем запусти 02 Клиенты и продажи\\Автопоиск клиентов (telegram)\\cloud\\Выключить локальный пульт.bat.\n"
+              "3️⃣ Напиши Claude в новой сессии: «вход в облако перенесён» — он проверит первый облачный старт.\n\n"
+              "Облако само стартует в 16:00 по Москве. Архив вчерашней работы: Cloud AI\\99 Архив\\Архив сессий\\2026-11-04…")},
+]
+
+def check_reminders(ctl):
+    """Присылает напоминания в назначенное время (если ПК был выключен — при первом запуске пульта, с пометкой)."""
+    done = ctl.cfg.setdefault("reminders_done", [])
+    now = time.time()
+    for r in REMINDERS:
+        if r["id"] in done: continue
+        at = datetime.datetime.fromisoformat(r["at"]).timestamp()
+        if now < at: continue
+        late = int((now - at) // 60)
+        say(r["text"] + (f"\n\n(напоминание пришло с опозданием на {late} мин: компьютер был выключен)" if late > 30 else ""))
+        done.append(r["id"]); ctl.save()
+
 def take_lock():
     try:
         pid = int(open(MYLOCK).read().strip())
@@ -460,6 +491,8 @@ def main():
                 ctl.cfg["report_date"] = now.date().isoformat(); ctl.save()
                 evening_report(ctl)
         except Exception as e: clog("отчёт:", e)
+        try: check_reminders(ctl)
+        except Exception as e: clog("напоминание:", e)
 
 if __name__ == "__main__":
     main()
