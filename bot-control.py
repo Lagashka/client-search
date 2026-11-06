@@ -37,8 +37,9 @@ DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
 B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 Отправленные"
 B_SETTINGS, B_LOG, B_RESTART = "⚙️ Настройки", "📝 Лог", "♻️ Перезапуск"
+B_BASE = "🗂 База лидов"
 KEYBOARD = {"keyboard": [[{"text": B_START}, {"text": B_STOP}],
-                         [{"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
+                         [{"text": B_BASE}, {"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
                          [{"text": B_SETTINGS}, {"text": B_LOG}, {"text": B_RESTART}]],
             "resize_keyboard": True, "is_persistent": True}
 
@@ -324,7 +325,7 @@ def handle_text(ctl, text):
     pend = ctl.cfg.get("pending")
     if low in ("/cancel", "отмена"):
         ctl.cfg.pop("pending", None); ctl.save(); say("Ок, отменил."); return
-    buttons = {B_START.lower(), B_STOP.lower(), B_STATUS.lower(), B_REPLIES.lower(), B_SENT.lower(),
+    buttons = {B_START.lower(), B_STOP.lower(), B_STATUS.lower(), B_REPLIES.lower(), B_SENT.lower(), B_BASE.lower(),
                B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower()}
     if pend and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
         to_inbox({"cmd": "send", "to": pend["to"], "text": t, "label": "✍️ Твой ответ"})
@@ -344,6 +345,8 @@ def handle_text(ctl, text):
         ctl.cfg["want"] = True; ctl.save()
         ctl.stop(); time.sleep(3); ctl.start()
         say("♻️ Перезапустил поиск — через минуту он снова в работе.")
+    elif low in (B_BASE.lower(), "/base", "база"):
+        send_crm(csv_too=False)
     elif low in (B_STATUS.lower(), "/status", "статус"):
         say(*render("status", ctl))
     elif low in (B_REPLIES.lower(), "/replies", "ответы"):
@@ -371,6 +374,8 @@ def handle_callback(ctl, cq):
         key = data.split(":")[1]
         s = settings(); s[key] = not s[key]; jsave(SETTINGS, s)
         edit(mid, *render_settings()); answer(cq, "Сохранено")
+    elif data == "crm:csv":
+        answer(cq, "Отправляю файл"); send_crm(csv_too=True)
     elif data == "spamcheck":
         to_inbox({"cmd": "spamcheck"})
         answer(cq, "Проверяю — ответ придёт через минуту" if ctl.running() else "Поиск выключен — проверю после запуска")
@@ -387,6 +392,24 @@ def handle_callback(ctl, cq):
             answer(cq, f"{label}: отправляю…" if ctl.running() else "Поиск выключен — отправлю после ▶️ Запустить")
     else:
         answer(cq)
+
+def send_crm(csv_too=False):
+    """Свежая сводка по базе лидов; csv_too — приложить таблицу файлом."""
+    try:
+        sys.path.insert(0, BASE)
+        import crm
+        st = jload(STATE, {}); st.setdefault("sent", {})
+        crm.write_files(st, BASE)
+        say(crm.board_text(st), markup={"inline_keyboard": [[{"text": "📋 Выгрузить базу (CSV)", "callback_data": "crm:csv"}]]})
+        if csv_too:
+            path = os.path.join(BASE, "leads.csv"); bd = uuid.uuid4().hex
+            body = (f"--{bd}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{OWNER}\r\n"
+                    f"--{bd}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"leads.csv\"\r\n"
+                    f"Content-Type: text/csv\r\n\r\n").encode() + open(path, "rb").read() + f"\r\n--{bd}--\r\n".encode()
+            urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendDocument", data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={bd}"}), timeout=30).read()
+    except Exception as e:
+        clog("crm:", e); say("Не получилось собрать базу: " + str(e)[:150])
 
 def evening_report(ctl):
     st, s = jload(STATE, {}), settings()
