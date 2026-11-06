@@ -32,7 +32,7 @@ PY = sys.executable.replace("pythonw.exe", "python.exe")
 NO_WINDOW = 0x08000000
 REPORT_HOUR = 21          # итог дня — в 21:00 по времени компьютера
 WATCHDOG_MIN = 20         # нет признаков жизни столько минут — перезапуск поиска
-DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True}
+DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True}
 
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
 B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 Отправленные"
@@ -305,6 +305,7 @@ def render_settings():
           [{"text": f"Вакансии {onoff('hot_on')}", "callback_data": "tog:hot_on"},
            {"text": f"Холодные {onoff('cold_on')}", "callback_data": "tog:cold_on"},
            {"text": f"Дожимы {onoff('fu_on')}", "callback_data": "tog:fu_on"}],
+          [{"text": f"🤖 Автоответы клиентам {onoff('autoreply')}", "callback_data": "tog:autoreply"}],
           [{"text": "🛡 Проверить аккаунт (@SpamBot)", "callback_data": "spamcheck"}]]
     return text, {"inline_keyboard": kb}
 
