@@ -64,7 +64,7 @@ HOURS_HOT = (7, 23)     # часы по Москве для откликов н�
 HOT_DISCOVER_EVERY = 2 * 3600   # как часто искать новые каналы с вакансиями
 HOURS_COLD = (10, 20)   # часы по Москве для холодных
 HOT_SCAN_EVERY = 12 * 60
-REPLY_CHECK_EVERY = 3 * 60      # ответы проверяем часто: скорость ответа клиенту = деньги
+REPLY_CHECK_EVERY = 60          # ответы проверяем каждую минуту: скорость ответа клиенту = деньги
 HOT_MAX_AGE_H = 36      # откликаемся только на посты не старше N часов
 FOLLOWUP_HOT_H = 24
 FOLLOWUP_COLD_H = 48
@@ -251,6 +251,19 @@ def notify(text, buttons=None, silent=False):
         urllib.request.urlopen(req, timeout=20).read()
     except Exception as e:
         log("бот не отправил уведомление:", str(e)[:80])
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import crm, autoreply
+
+def bot_token():
+    global _BOT
+    if not _BOT:
+        _BOT = os.environ.get("BOT_TOKEN", "")
+        if not _BOT:
+            try:
+                m = re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", open(BOTFILE, encoding="utf-8").read()); _BOT = m.group(0) if m else ""
+            except Exception: _BOT = ""
+    return _BOT
 
 NEG_REPLY = re.compile(r"не актуальн|неактуальн|не нужн|не интерес|не надо|не требуется|уже наш(ли|ёл|ел)|уже выбрал|"
                        r"уже есть монтаж|нет,? спасибо|спасибо,? (но )?нет|спасибо,? не|отказ|вакансия закрыта|"
@@ -982,6 +995,16 @@ def main():
             if ch:
                 item["text"] = compose_cold(ch, item["display"], item["niche"], item["variant"]); item["uniq"] = 1
         except Exception: pass
+    # разовый перенос старых ответов в CRM: статус по тексту ответа из ОТВЕТЫ.md
+    try:
+        for line in open(REPLIES, encoding="utf-8"):
+            m = re.match(r"- \S+ @(\w+) .*?«(.*)»", line)
+            if m and m.group(1) in st["sent"]:
+                e = st["sent"][m.group(1)]
+                if e.get("replied") and not e.get("crm"):
+                    v = crm.classify(m.group(2)); crm.mark(e, v, m.group(2)); e["last_in"] = m.group(2)
+                    e["outcome"] = "no" if v == crm.ST_REFUSED else "hot"
+    except Exception: pass
     frontier = list(st["frontier"])
     contacted |= already_contacted_external()
     contacted |= {u.lower() for u in st["sent"]}
@@ -991,6 +1014,13 @@ def main():
                   hot_seen=sorted(hot_seen)[-6000:], notified=sorted(notified)[-4000:],
                   skeletons=list(USED_SKELETONS)[-30000:])
         jsave(STATE, st)
+
+    def crm_sync():
+        """База лидов обновляется в момент события: файлы + «живое табло» в боте."""
+        try:
+            crm.write_files(st, BASE)
+            if not DRY: crm.push_board(st, bot_token(), MY_ID)
+        except Exception as ex: log("crm:", str(ex)[:80])
 
     def day():
         if st["day"].get("date") != today():          # итог дня присылает пульт в 21:00, тут только обнуляем
@@ -1104,6 +1134,7 @@ def main():
     next_hot = 0; next_replies = time.time() + 120; next_send = 0; next_status = 0; fails = 0
     T0 = time.time()
     next_hot_disc = time.time() + 600
+    next_crm = 0
 
     while True:
         try:
@@ -1111,6 +1142,7 @@ def main():
             d = day()
             s = S()
             live()
+            if now >= next_crm: crm_sync(); next_crm = now + 600       # «молчит >48ч» и прочие статусы по времени
             process_inbox()
             if CLOUD:
                 web.tick_bot()                              # кнопки пульта обрабатываются здесь же
@@ -1150,8 +1182,14 @@ def main():
                                 manual.append(f"• {cut(hot_task(post['text']) or post['text'], 90)}\n  {link}")
                             continue
                         u, dn = target
+                        text = compose_hot(post, c["title"] or chn, dn)
+                        if autoreply.enabled():                 # письмо под конкретного клиента: вакансия + его био
+                            fm = autoreply.first_message(post["text"], u, dn)
+                            if fm and not fm["fit"]:
+                                log(f"не наш профиль, пропускаю @{u}: {fm['reason']}"); continue
+                            if fm: text = fm["text"]
                         st["hot_q"].append({"username": u, "display": dn, "post": link, "found": now, "uniq": 1,
-                                            "text": compose_hot(post, c["title"] or chn, dn)})
+                                            "text": text})
                         contacted.add(u.lower()); new += 1
                         log(f"ВАКАНСИЯ: @{u} ({dn}) ← {link}")
                 save()
@@ -1183,27 +1221,57 @@ def main():
             # ---- 2. ответы
             if web and now >= next_replies:
                 next_replies = now + REPLY_CHECK_EVERY
-                peers = {e["peer"]: u for u, e in st["sent"].items() if e.get("peer") and not e.get("replied")}
+                # следим и за теми, кто уже ответил, но диалог ещё ведёт бот (auto_n) и не передан Егору
+                peers = {e["peer"]: u for u, e in st["sent"].items() if e.get("peer")
+                         and e.get("crm") not in (crm.ST_REFUSED, crm.ST_AGREED) and not e.get("handoff")
+                         and (not e.get("replied") or e.get("auto_n"))}
                 if peers:
                     live(phase="проверяю, кто ответил")
                     try: got = web.scan_replies(peers)
                     except Exception as e: got = {}; log("проверка ответов не удалась:", str(e)[:80])
                     for pid, snippet in got.items():
                         u = peers[pid]; e = st["sent"][u]
-                        e["replied"] = datetime.datetime.now().isoformat(timespec="minutes")
+                        if snippet and snippet == e.get("last_in"): continue      # это сообщение уже обработано
+                        first = not e.get("replied")
+                        if first: e["replied"] = datetime.datetime.now().isoformat(timespec="minutes")
+                        e["last_in"] = snippet
+                        e.setdefault("thread", []).append({"who": "them", "text": snippet})
                         kind = "вакансия" if e["kind"] == "hot" else f"холодное, вариант {e.get('variant')}"
-                        if NEG_REPLY.search(snippet):          # отказ — тихо, без звука
-                            e["outcome"] = "no"
-                            notify(f"❌ Отказ: {e.get('display', '')} (@{u})\n«{snippet}»",
-                                   buttons=[[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]], silent=True)
-                        else:
-                            e["outcome"] = "hot"
-                            notify(f"🔥 ОТВЕТИЛ {e.get('display', '')} (@{u})\n«{snippet}»\n\n{kind}: {e.get('source', '')}\n\n"
-                                   f"Ответь в ближайшие минуты — так закрываются сделки. Быстрый ответ — кнопками ниже:",
-                                   buttons=reply_buttons(u))
+                        verdict = crm.classify(snippet)
+                        crm.mark(e, verdict, snippet)
+                        e["outcome"] = "no" if verdict == crm.ST_REFUSED else "hot"
+                        link = [[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]]
                         with open(REPLIES, "a", encoding="utf-8") as f:
-                            f.write(f"- {e['replied']} @{u} ({e.get('display', '')}) — {kind} — «{snippet}» — https://t.me/{u}\n")
-                    save()
+                            f.write(f"- {e['replied']} @{u} ({e.get('display', '')}) — {kind} — {crm.LABEL[verdict]} — «{snippet}» — https://t.me/{u}\n")
+                        if verdict == crm.ST_REFUSED:
+                            notify(f"❌ Отказ: {e.get('display', '')} (@{u})\n«{snippet}»", buttons=link, silent=True)
+                            continue
+                        # автодиалог: только если есть ключ Claude, лимит не выбран и человек не готов к сделке
+                        auto = None
+                        if (autoreply.enabled() and s.get("autoreply", True) and verdict != crm.ST_AGREED
+                                and e.get("auto_n", 0) < autoreply.MAX_AUTO):
+                            live(phase=f"пишу ответ @{u}")
+                            auto = autoreply.generate(e, snippet)
+                        sent_auto = False
+                        if auto:
+                            try: rr = web.send_reply(u, e.get("peer"), auto["text"])
+                            except Limited: raise
+                            except Exception as ex: rr = "fail:" + str(ex)[:60]
+                            if rr == "sent":
+                                sent_auto = True; e["auto_n"] = e.get("auto_n", 0) + 1
+                                e["thread"].append({"who": "me", "text": auto["text"]})
+                                log(f"АВТООТВЕТ @{u}: {auto['text'][:80]}")
+                                if auto["handoff"] or e["auto_n"] >= autoreply.MAX_AUTO: e["handoff"] = True
+                        if verdict == crm.ST_AGREED or e.get("handoff") or not sent_auto:
+                            if verdict == crm.ST_AGREED: e["handoff"] = True
+                            head = "✅ СОГЛАСИЛСЯ" if verdict == crm.ST_AGREED else "🔥 ОТВЕТИЛ"
+                            extra = (f"\n\n🤖 Я уже ответил: «{auto['text'][:300]}»\nПричина передачи: {auto['reason']}" if sent_auto else "")
+                            notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{extra}\n\n{kind}: {e.get('source', '')}\n\n"
+                                   f"Подключайся лично. Быстрый ответ — кнопками ниже:", buttons=reply_buttons(u))
+                        elif sent_auto:
+                            notify(f"🤖 Веду диалог с {e.get('display', '')} (@{u})\nОн: «{snippet[:200]}»\nЯ: «{auto['text'][:300]}»",
+                                   buttons=link, silent=True)
+                    save(); crm_sync()
 
             # ---- 3. отправка: одно сообщение за раз, потом пауза
             limited = bool(st["limited_until"]) and st["limited_until"] > datetime.datetime.now().isoformat()
@@ -1264,6 +1332,7 @@ def main():
                             st["sent"][item["username"]] = {"kind": kind, "peer": peer, "ts": now, "date": today(),
                                 "display": item["display"], "variant": item.get("variant"),
                                 "source": item.get("post") or item.get("source"), "text": item["text"]}
+                            crm_sync()
                             log(f"ОТПРАВЛЕНО [{'вакансия' if kind == 'hot' else 'холодное'}] @{item['username']} — сегодня: "
                                 f"вакансии {d['hot']}/{s['limit_hot']}, холодные+дожимы {d['cold'] + d['fu']}/{s['limit_cold']}")
                             next_send = time.time() + gap()
