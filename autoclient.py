@@ -834,8 +834,22 @@ class Web:
                     if self.premium_only() or "premium" in p.locator("body").inner_text()[-3000:].lower():
                         return "skip:пишут только Premium"
                     return "fail:сообщение не ушло"
+                # Telegram может отклонить сообщение уже после появления пузыря: пузырь исчезает,
+                # а текст возвращается в поле ввода черновиком. Ждём и проверяем ещё раз.
+                time.sleep(3)
+                if self.flood_popup(): raise Limited("Telegram ограничил сообщения незнакомым")
+                after = self.last_out()
+                if probe not in after["text"] or "is-error" in after["cls"] or (probe[:12] and probe[:12] in self.input_text()):
+                    return "fail:Telegram не принял сообщение (остался черновик)"
                 return "sent"
         return "fail:отправка не подтвердилась"
+
+    def input_text(self):
+        try:
+            box = self.page.locator(f"{self.INPUT}:visible").first
+            return re.sub(r"\s+", " ", EMOJI_RE.sub("", box.inner_text() or "")) if box.count() else ""
+        except Exception:
+            return ""
 
     def send_new(self, username, text):
         st, info = self.open_chat(username)
@@ -874,10 +888,13 @@ class Web:
         return names
 
     def scan_replies(self, peers):
-        """peers: {peer_id: username} → {peer_id: текст последнего входящего}."""
+        """peers: {peer_id: username} → {peer_id: текст последнего входящего}.
+        Черновики («Draft: …» / «Черновик: …») — это НЕ ответ клиента, а наше неотправленное сообщение:
+        такие чаты складываются в self.drafts."""
         p = self.page
         self.home()
         found = {}
+        self.drafts = set()
         for _ in range(20):                       # ждём, пока список чатов прогрузится
             if p.locator("#folders-container .chatlist-chat").count() >= 5: break
             time.sleep(0.5)
@@ -891,8 +908,12 @@ class Web:
             except Exception:
                 rows = []
             for info in rows:
-                if info["peer"] in peers and ("hide" in info["st"] or info["unread"]):
-                    found[info["peer"]] = re.sub(r"\s+", " ", info["sub"]).strip()[:200]
+                if info["peer"] not in peers: continue
+                sub = re.sub(r"\s+", " ", info["sub"]).strip()
+                if re.match(r"^(draft|черновик)\s*:", sub, re.I):
+                    self.drafts.add(info["peer"]); continue
+                if "hide" in info["st"] or info["unread"]:
+                    found[info["peer"]] = sub[:200]
             try:
                 p.locator("#folders-container .chatlist").first.evaluate(
                     "e => { const s = e.closest('.scrollable') || e.parentElement; s.scrollTop += 2500 }")
@@ -1243,6 +1264,18 @@ def main():
                     live(phase="проверяю, кто ответил")
                     try: got = web.scan_replies(peers)
                     except Exception as e: got = {}; log("проверка ответов не удалась:", str(e)[:80])
+                    # черновик вместо отправленного сообщения: Telegram его не принял — убираем из базы и чистим поле
+                    for pid in getattr(web, "drafts", set()):
+                        u = peers[pid]; e = st["sent"].get(u) or {}
+                        if e.get("replied") or e.get("thread"): continue           # в живом диалоге черновик не трогаем
+                        try:
+                            if web.open_chat(u, pid)[0] == "ok" and not web.bubbles()[0]: web.clear_input()
+                        except Exception: pass
+                        st["sent"].pop(u, None); bad.add(u.lower())
+                        log(f"НЕ ДОШЛО @{u}: в чате остался черновик, Telegram не принял сообщение — убрал из базы")
+                        notify(f"⚠️ Сообщение @{u} не дошло (Telegram его не принял, остался черновик). Убрал черновик и вычеркнул из базы.",
+                               silent=True)
+                    if getattr(web, "drafts", None): save()
                     for pid, snippet in got.items():
                         u = peers[pid]; e = st["sent"][u]
                         if snippet and snippet == e.get("last_in"): continue      # это сообщение уже обработано
