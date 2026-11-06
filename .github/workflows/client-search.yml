@@ -61,6 +61,7 @@ jobs:
           TZ: Europe/Moscow
           PYTHONIOENCODING: utf-8
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           WEB_STATE_0: ${{ secrets.WEB_STATE_0 }}
           WEB_STATE_1: ${{ secrets.WEB_STATE_1 }}
           WEB_STATE_2: ${{ secrets.WEB_STATE_2 }}
