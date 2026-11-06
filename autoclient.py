@@ -31,7 +31,16 @@ STATUS = os.path.join(BASE, "СТАТУС.md")
 REPLIES = os.path.join(BASE, "ОТВЕТЫ.md")
 QR = os.path.join(BASE, "qr.png")
 PROFILE = os.path.join(BASE, "profile")
-BOTFILE = os.path.join(ROOT, ".telegram-bot.txt")
+def _find_botfile():
+    """Токен бота: ищется рядом с папкой и в «05 Доступы и служебное» (после наведения порядка 05.11)."""
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(5):
+        for cand in (os.path.join(d, ".telegram-bot.txt"), os.path.join(d, "05 Доступы и служебное", ".telegram-bot.txt")):
+            if os.path.exists(cand):
+                return cand
+        d = os.path.dirname(d)
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".telegram-bot.txt")
+BOTFILE = _find_botfile()
 SETTINGS = os.path.join(BASE, "settings.json")   # меняется из бота (⚙️ Настройки), читается на лету
 INBOX = os.path.join(BASE, "inbox")              # команды из бота: быстрые ответы клиентам, проверка аккаунта
 LIVE = os.path.join(BASE, "live.json")           # что скрипт делает прямо сейчас (для 📊 Статус и сторожа)
