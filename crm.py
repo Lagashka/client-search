@@ -97,6 +97,7 @@ def board_text(st):
              f"🎯 конверсия: ответ {f['reply_rate']} → тёплый {f['warm_rate']} → сделка {f['close_rate']}"]
     if hot:
         lines += ["", "Сейчас в работе:"] + [f"{LABEL[r['status']][:2]} {r['name']} @{r['username']} — {r['last_reply'][:50]}" for r in hot]
+    if st.get("diag"): lines += ["", st["diag"]]
     return "\n".join(lines)
 
 def push_board(st, token, chat_id, buttons=None):
