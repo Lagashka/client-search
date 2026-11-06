@@ -1,6 +1,7 @@
 # Поиск клиентов 24/7: задача работает ~5 ч 45 мин, потом сама завершается.
 # Расписание запускает новую каждый час: пока идёт старая, новая ждёт в очереди и стартует сразу после неё.
 # Отложенный старт: пока не наступило время из переменной репозитория START_AFTER, задача сразу завершается.
+# ИИ необязателен: без ключей бот работает на правилах бесплатно. С секретом GROQ_API_KEY или OPENROUTER_API_KEY — пишет ИИ (тоже бесплатно).
 name: client-search
 
 on:
@@ -12,11 +13,21 @@ concurrency:
   group: client-search
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write        # только для шага keepalive ниже
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 358
     steps:
+      - name: Keepalive (GitHub отключает расписание после 60 дней без активности)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/client-search.yml/enable" || true
+
       - name: Gate (отложенный старт)
         id: gate
         env:
@@ -61,6 +72,8 @@ jobs:
           TZ: Europe/Moscow
           PYTHONIOENCODING: utf-8
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           STATE_SEED: ${{ secrets.STATE_SEED }}
           WEB_STATE_0: ${{ secrets.WEB_STATE_0 }}
