@@ -54,7 +54,7 @@ if DRY: STATE = os.path.join(BASE, "state-dry.json")
 # ======================= НАСТРОЙКИ =======================
 MY_NAME = "Егор"
 MY_ID = 5787402361                     # твой Telegram id (уведомления от бота + самотест)
-MY_USERNAME = "filmdirector715"
+MY_USERNAME = "chernyshev_edit"
 PORTFOLIO = "https://t.me/zakulisy715"
 CASE = "https://t.me/zakulisy715/45"   # ролик «Ипотека» — кейс для финансов/недвижимости/юристов
 
