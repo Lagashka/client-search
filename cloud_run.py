@@ -29,11 +29,11 @@ def merge_seed(env=os.environ, path=os.path.join(HERE, "state.json")):
     """База с ПК (секрет STATE_SEED, base64 от gzip JSON) подмешивается в облачное состояние один раз."""
     import json, hashlib
     raw = env.get("STATE_SEED", "").strip()
-    if not raw: return
+    if not raw: return "секрет STATE_SEED пустой"
     sid = hashlib.sha1(raw.encode()).hexdigest()[:12]
     try: st = json.load(open(path, encoding="utf-8"))
     except Exception: st = {}
-    if st.get("seed_id") == sid: return
+    if st.get("seed_id") == sid: return f"уже подмешана ранее ({len(st.get('sent', {}))} лидов)"
     seed = json.loads(gzip.decompress(base64.b64decode(raw)))
     sent = st.setdefault("sent", {})
     for u, e in seed.get("sent", {}).items():
@@ -50,11 +50,26 @@ def merge_seed(env=os.environ, path=os.path.join(HERE, "state.json")):
     st.setdefault("hot_rules", seed.get("hot_rules", 1))
     st["seed_id"] = sid
     with open(path, "w", encoding="utf-8") as f: json.dump(st, f, ensure_ascii=False, indent=1)
-    print(f"База с ПК подмешана: лидов {len(sent)}, в очереди {len(st['hot_q'])}")
+    msg = f"подмешана: лидов {len(sent)}, в очереди {len(st['hot_q'])}"
+    print("База с ПК " + msg)
+    return msg
+
+def write_diag(text, path=os.path.join(HERE, "state.json")):
+    """Строка диагностики попадает на закреплённое табло в боте (crm.board_text)."""
+    import json
+    try: st = json.load(open(path, encoding="utf-8"))
+    except Exception: st = {}
+    st["diag"] = text
+    with open(path, "w", encoding="utf-8") as f: json.dump(st, f, ensure_ascii=False, indent=1)
 
 if __name__ == "__main__":
-    try: merge_seed()
-    except Exception as ex: print("seed:", ex)
+    import traceback
+    try: seed = merge_seed()
+    except Exception as ex:
+        seed = f"ошибка: {type(ex).__name__}: {str(ex)[:120]}"; traceback.print_exc()
+    ai = [k for k in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY") if os.environ.get(k)]
+    try: write_diag(f"☁️ база с ПК: {seed} · ИИ: {', '.join(k.split('_')[0].lower() for k in ai) or 'нет, работают правила'}")
+    except Exception as ex: print("diag:", ex)
     if not os.environ.get("BOT_TOKEN"):
         print("Нет секрета BOT_TOKEN: GitHub → Settings → Secrets and variables → Actions"); sys.exit(1)
     state = assemble_state()
