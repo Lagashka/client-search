@@ -67,8 +67,16 @@ if __name__ == "__main__":
     try: seed = merge_seed()
     except Exception as ex:
         seed = f"ошибка: {type(ex).__name__}: {str(ex)[:120]}"; traceback.print_exc()
-    ai = [k for k in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY") if os.environ.get(k)]
-    try: write_diag(f"☁️ база с ПК: {seed} · ИИ: {', '.join(k.split('_')[0].lower() for k in ai) or 'нет, работают правила'}")
+    try:                                   # живая проверка ИИ одним коротким запросом
+        import autoreply
+        if autoreply.llm_on():
+            j, src = autoreply._llm('Ответь строго JSON: {"ok": true}', [{"role": "user", "content": "проверка связи"}], 300)
+            ai = f"{src} ✅" if j else "❌ " + "; ".join(f"{k}: {v[:70]}" for k, v in autoreply.LAST_ERR.items()) + " — пишу по правилам"
+        else:
+            ai = "нет ключа, работают правила"
+    except Exception as ex:
+        ai = f"проверка не удалась: {str(ex)[:80]}"
+    try: write_diag(f"☁️ база с ПК: {seed} · ИИ: {ai}")
     except Exception as ex: print("diag:", ex)
     if not os.environ.get("BOT_TOKEN"):
         print("Нет секрета BOT_TOKEN: GitHub → Settings → Secrets and variables → Actions"); sys.exit(1)
