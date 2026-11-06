@@ -5,7 +5,7 @@
 ответы на типовые вопросы (цена, примеры, сроки, тест, условия), передача Егору всего остального.
 Если в окружении появится ключ ИИ, письма и ответы пишет ИИ (по порядку): GROQ_API_KEY (бесплатно ~1000 запросов/день),
 OPENROUTER_API_KEY (бесплатные модели :free, 50/день), ANTHROPIC_API_KEY (платно). Любой сбой ИИ → снова правила."""
-import os, json, re, random, urllib.request, urllib.error
+import os, json, re, random, time, urllib.request, urllib.error
 
 PORTFOLIO = "https://t.me/zakulisy715"
 CASE = "https://t.me/zakulisy715/45"
@@ -194,10 +194,13 @@ def rule_reply(text, verdict):
 # ============================ 4. ИИ (если есть бесплатный/платный ключ) ============================
 SYSTEM = """Ты пишешь в Telegram от имени Егора, видеомонтажёра (Reels/Shorts, YouTube, моушн в After Effects, звук).
 Егор откликнулся на вакансию, человек ответил. Веди живой короткий диалог и подводи к бесплатному тесту или созвону.
-Пиши по-русски, на «вы», 2–5 коротких предложений, без списков, максимум один эмодзи, как живой занятой человек.
+Пиши грамотным живым разговорным русским, как в переписке, на «вы», 2–5 коротких предложений, без списков, максимум один эмодзи, как живой занятой человек. Без канцелярита и кальки с английского.
+Пиши от первого лица в мужском роде, как в шаблонах Егора: «увидел», «готов», «сделал».
+Не вываливай весь прайс: назови 1–2 цены, которые подходят под вопрос. Не начинай каждое сообщение с приветствия — диалог уже идёт.
 Схема: ответь по сути; назови одну конкретную проблему, которая следует из слов человека; предложи решение (тест на его материале, примеры, созвон 10 минут); один вопрос в конце.
 Факты: работы https://t.me/zakulisy715; короткий ролик от 3 000 ₽ (5 000 со звуком, 8 000 с моушном и сдачей за 24 ч), длинное от 5 000 ₽, пакет 5 роликов 12 000 ₽ в месяц; короткий ролик 1–2 дня; договор, чек самозанятого, предоплата 50%; тест бесплатный, 10–15 секунд.
-Нельзя: выдумывать кейсы, отзывы, клиентов, цифры результатов; снижать цену; обещать то, чего нет в фактах.
+Нельзя: выдумывать кейсы, отзывы, клиентов, цифры результатов; снижать цену; обещать то, чего нет в фактах; называть конкретное время созвона (спроси, когда удобно).
+Если спрашивают про опыт в конкретной нише или теме (спорт, животные, авто и т. п.) — не утверждай, что опыт есть: честно скажи, что отдельного кейса в этой теме нет, предложи бесплатный тест и поставь handoff=true.
 Если прямо спросили, бот ли ты, — честно: «Это автоответчик Егора, он подключится лично», handoff=true.
 handoff=true, когда человек согласился, просит созвон, называет бюджет, прислал материал/ТЗ, задал вопрос без ответа в фактах, злится.
 Ответ строго JSON: {"text": "...", "handoff": true|false, "reason": "коротко"}"""
@@ -205,16 +208,21 @@ handoff=true, когда человек согласился, просит со�
 FIRST = """Ты пишешь первое сообщение в Telegram от имени Егора, видеомонтажёра, автору вакансии.
 Егор умеет: монтаж Reels/Shorts/TikTok и YouTube, субтитры, цвет, звук и чистка голоса, моушн в After Effects (титры, инфографика, логотип, заставки). Работает удалённо.
 Не берётся: съёмка на месте, SMM целиком, карусели, ретушь, AI-генерация видео, копирайтинг, продажи, офис, оплата ниже 1 500 ₽ за ролик.
-Сначала реши fit. Если подходит — письмо: по-русски, на «вы», 4–7 коротких предложений абзацами, без эмодзи, без «готов взять в работу»;
-обращение по имени, если понятно; деталь из вакансии или био; конкретная проблема таких заказчиков; как Егор её решает; ссылка https://t.me/zakulisy715; бесплатный тест на их материале; один вопрос.
-Цену — только если её просят: «короткий ролик от 3 000 ₽»; для зарплатных вакансий не называй. Ничего не выдумывай.
+fit=true, если среди задач есть монтаж видео (Reels, YouTube, промо, подкаст, моушн), даже когда в вакансии есть и другое (идеи, бриф, сценарии, публикация) — тогда в письме скажи, что берёшь монтаж и подачу ролика.
+fit=false только если главная задача не монтаж: SMM-ведение целиком, съёмка на месте в другом городе, ретушь, генерация AI-видео, продажи, блогеры, или оплата явно ниже 1 500 ₽ за ролик.
+Пиши грамотным живым разговорным русским, как в переписке, без канцелярита и без кальки с английского.
+Пиши от первого лица в мужском роде, как в шаблонах Егора: «увидел», «готов», «сделал».
+Если подходит — письмо: на «вы», 4–7 коротких предложений абзацами, без эмодзи, без «готов взять в работу»;
+начни с «Здравствуйте» или «Добрый день» (с именем, если оно понятно и написано по-русски), без «привет» и без прощаний в конце;
+деталь из вакансии или био; одна конкретная проблема таких заказчиков, названная прямо; как Егор её решает; «Работы: https://t.me/zakulisy715» (про канал больше ничего не утверждай); бесплатный тест на их материале; один вопрос в конце.
+Цену — только если её просят: «короткий ролик от 3 000 ₽»; для зарплатных вакансий не называй. Не выдумывай опыт в нишах, клиентов, результаты.
 Ответ строго JSON: {"fit": true|false, "reason": "коротко", "text": "письмо или пусто"}"""
 
 def _providers():
     out = []
     if os.environ.get("GROQ_API_KEY"):
-        out.append(("groq", "https://api.groq.com/openai/v1/chat/completions", os.environ["GROQ_API_KEY"],
-                    os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")))
+        for i, m in enumerate(os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b,openai/gpt-oss-120b").split(",")):
+            out.append((f"groq{i}", "https://api.groq.com/openai/v1/chat/completions", os.environ["GROQ_API_KEY"], m.strip()))
     if os.environ.get("OPENROUTER_API_KEY"):
         out.append(("openrouter", "https://openrouter.ai/api/v1/chat/completions", os.environ["OPENROUTER_API_KEY"],
                     os.environ.get("OPENROUTER_MODEL", "openai/gpt-oss-120b:free")))
@@ -223,30 +231,55 @@ def _providers():
                     os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5")))
     return out
 
-_DEAD = set()          # провайдеры, которые сегодня ответили ошибкой лимита/ключа — дальше не дёргаем
+_DEAD = set()          # провайдеры с негодным ключом/моделью — до перезапуска не дёргаем
+_COOL = {}             # провайдер → время, до которого пауза из-за лимита (429)
+LAST_ERR = {}          # последняя ошибка по провайдеру — для лога
+
+def _alive(name):
+    return name not in _DEAD and _COOL.get(name, 0) < time.time()
 
 def llm_on():
-    return any(p[0] not in _DEAD for p in _providers())
+    return any(_alive(p[0]) for p in _providers())
+
+def _call(name, url, key, model, system, messages, max_tokens):
+    if name == "anthropic":
+        body = {"model": model, "max_tokens": max_tokens, "system": system, "messages": messages}
+        hdr = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"}
+    else:
+        body = {"model": model, "max_tokens": max_tokens, "temperature": 0.7,
+                "messages": [{"role": "system", "content": system}] + messages}
+        hdr = {"content-type": "application/json", "authorization": f"Bearer {key}"}
+    hdr["User-Agent"] = "client-search/1.0"          # без него Groq/Cloudflare отвечает 403
+    r = json.loads(urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(body).encode(), headers=hdr), timeout=60).read())
+    out = r["content"][0]["text"] if name == "anthropic" else r["choices"][0]["message"]["content"]
+    out = re.sub(r"<think>.*?</think>", "", out or "", flags=re.S)          # модели с «размышлениями»
+    m = re.search(r"\{.*\}", out, re.S)
+    if not m: raise ValueError("ответ без JSON")
+    return json.loads(m.group(0))
 
 def _llm(system, messages, max_tokens=700):
     for name, url, key, model in _providers():
-        if name in _DEAD: continue
-        try:
-            if name == "anthropic":
-                body = {"model": model, "max_tokens": max_tokens, "system": system, "messages": messages}
-                hdr = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"}
-            else:
-                body = {"model": model, "max_tokens": max_tokens, "temperature": 0.8,
-                        "messages": [{"role": "system", "content": system}] + messages}
-                hdr = {"content-type": "application/json", "authorization": f"Bearer {key}"}
-            r = json.loads(urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(body).encode(), headers=hdr), timeout=60).read())
-            out = r["content"][0]["text"] if name == "anthropic" else r["choices"][0]["message"]["content"]
-            return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), name
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 402, 403, 404, 429): _DEAD.add(name)
-        except Exception:
-            pass
+        if not _alive(name): continue
+        for attempt in range(2):
+            try:
+                return _call(name, url, key, model, system, messages, max_tokens), name
+            except urllib.error.HTTPError as e:
+                LAST_ERR[name] = f"HTTP {e.code}: {e.read()[:200]!r}"
+                if e.code in (401, 402, 403, 404): _DEAD.add(name); break     # ключ/модель не годятся — до перезапуска
+                if e.code == 429:                                              # лимит в минуту: ждём и пробуем ещё раз
+                    wait = min(float(e.headers.get("retry-after") or 20), 30)
+                    if attempt == 0: time.sleep(wait); continue
+                    _COOL[name] = time.time() + 120
+                break
+            except Exception as e:
+                LAST_ERR[name] = str(e)[:200]; break
     return None, None
+
+def _sane(txt):
+    """Страховка от выдумок ИИ: цена ниже прайса, «привет», прощания."""
+    for a in re.findall(r"(\d[\d\s ]{0,6})\s*₽", txt):
+        if int(re.sub(r"\D", "", a) or 0) < 3000: return False
+    return not re.search(r"(^|\s)привет\b|хорошего дня|удачного дня|удачный день", txt, re.I)
 
 def _bio(username):
     try:
@@ -259,11 +292,13 @@ def _bio(username):
 def first_message(vacancy, username, display, bio=None):
     """ИИ-письмо по вакансии и био → {'fit','reason','text'} или None (тогда — правила)."""
     if not llm_on(): return None
+    ok, why = rule_fit(vacancy)                  # отбор — правилами (они точнее ИИ), письмо — ИИ
+    if not ok: return {"fit": False, "reason": why, "text": ""}
     j, _ = _llm(FIRST, [{"role": "user", "content": f"Автор: {display} (@{username})\nБио: {bio if bio is not None else _bio(username) or 'нет'}\n\nВакансия:\n{vacancy[:2500]}"}])
     if not j: return None
-    fit = bool(j.get("fit")); txt = str(j.get("text", "")).strip()
-    if fit and (len(txt) < 120 or len(txt) > 1500 or "zakulisy715" not in txt): return None
-    return {"fit": fit, "reason": str(j.get("reason", ""))[:120], "text": txt}
+    txt = str(j.get("text", "")).strip()
+    if len(txt) < 120 or len(txt) > 1500 or "zakulisy715" not in txt or not _sane(txt): return None   # → письмо по правилам
+    return {"fit": True, "reason": str(j.get("reason", ""))[:120], "text": txt}
 
 def max_auto():
     return 5 if llm_on() else 3
@@ -282,7 +317,7 @@ def generate(e, their_text, verdict=""):
         if msgs[0]["role"] != "user":
             msgs.insert(0, {"role": "user", "content": f"(контекст: {e.get('display', '')} отвечает на отклик по вакансии {e.get('source', '')})"})
         j, src = _llm(SYSTEM, msgs, 500)
-        if j and str(j.get("text", "")).strip() and len(str(j["text"])) < 900:
+        if j and str(j.get("text", "")).strip() and len(str(j["text"])) < 900 and _sane(str(j["text"])):
             return {"text": str(j["text"]).strip(), "handoff": bool(j.get("handoff")), "reason": str(j.get("reason", ""))[:120], "src": src}
     return rule_reply(their_text, verdict)
 
