@@ -65,6 +65,8 @@ HOT_DISCOVER_EVERY = 2 * 3600   # как часто искать новые ка
 HOURS_COLD = (10, 20)   # часы по Москве для холодных
 HOT_SCAN_EVERY = 12 * 60
 REPLY_CHECK_EVERY = 60          # ответы проверяем каждую минуту: скорость ответа клиенту = деньги
+AUTO_DELAY = (70, 260)          # автоответ уходит через 1–4 мин, а не мгновенно
+AUTO_HOURS = (8, 23)            # автоответы — днём по Москве; ночные сообщения получат ответ утром
 HOT_MAX_AGE_H = 36      # откликаемся только на посты не старше N часов
 FOLLOWUP_HOT_H = 24
 FOLLOWUP_COLD_H = 48
@@ -299,7 +301,10 @@ def user_page(u):
     if not m: return None
     extra = clean((re.search(r'tgme_page_extra[^>]*>(.*?)</div>', h, re.S) or [None, ""])[1]).lower()
     if any(w in extra for w in ("subscriber", "member", "подписч", "участник", "online")): return None
+    USER_BIO[u.lower()] = clean((re.search(r'tgme_page_description[^>]*>(.*?)</div>', h, re.S) or [None, ""])[1])[:400]
     return clean(m.group(1))
+
+USER_BIO = {}     # био автора вакансии (с той же страницы t.me/u) — для подстройки письма
 
 # ======================= разбор публичной страницы канала =======================
 TME_RE = re.compile(r"t\.me/(?:s/)?([A-Za-z][A-Za-z0-9_]{4,31})(?![A-Za-z0-9_/])")
@@ -413,9 +418,10 @@ def hot_fit(sp, text):
     case = bool(re.search(r"ипотек|недвиж|финанс|кредит|юрист|банкрот|эксперт|инвест|бизнес", low))
     return " ".join(skills[:2]), case
 
-def compose_hot(post, ch_title, display):
+def compose_hot(post, ch_title, display, bio=""):
     fn = first_name(display)
     low = post["text"].lower()
+    lowfull = low + " " + (bio or "").lower()
     task = hot_task(post["text"])
     ch = cut(EMOJI_RE.sub("", ch_title).strip(), 50)
     shoot = re.search(r"съёмк|съемк|снимать|сниму|оператор|мобилограф|ugc|на камеру|в кадре", low)
@@ -425,6 +431,7 @@ def compose_hot(post, ch_title, display):
 
     def build(sp):
         fit, case = hot_fit(sp, post["text"])
+        pain = autoreply.pain_for(sp, post["text"], bio)   # проблема клиента → как Егор её решает
         q = f"«{task}»" if task else ""
         seen = (sp(f"Увидел вашу вакансию в «{ch}»: {q}.", f"Пишу по вашему посту в «{ch}» — {q}.",
                    f"Нашёл вашу вакансию в «{ch}»: {q}.", f"Откликаюсь на вакансию из «{ch}»: {q}.")
@@ -442,7 +449,7 @@ def compose_hot(post, ch_title, display):
         if price: terms.append(sp("По цене: короткий ролик от 3 000 ₽, точнее назову, когда увижу исходники и объём.",
                                   "Короткий ролик — от 3 000 ₽, точную цену скажу по исходникам.",
                                   "Стоимость — от 3 000 ₽ за короткий ролик, зависит от объёма."))
-        if short: terms.append(sp("Короткий ролик сдаю за 1–2 дня.", "Сроки на короткий ролик — 1–2 дня.",
+        if short and not (pain and "1–2 дня" in pain[1]): terms.append(sp("Короткий ролик сдаю за 1–2 дня.", "Сроки на короткий ролик — 1–2 дня.",
                                   "Вертикальный ролик обычно отдаю за 1–2 дня."))
         if shoot: terms.append(sp("Монтаж беру полностью; съёмку делаю только в проекте под ключ вместе с партнёром-оператором.",
                                   "Я монтирую, а съёмка у меня — только в пакете под ключ с оператором-партнёром, можем обсудить."))
@@ -455,7 +462,10 @@ def compose_hot(post, ch_title, display):
                  "Если удобно, сделаю пробный фрагмент — пришлите исходник или ТЗ.",
                  "Давайте я сделаю тестовый кусок, чтобы вы оценили стиль? Нужен только исходник.",
                  "Расскажете подробнее про объём и сроки? Могу начать с теста.")
-        body = [f"{hi_line(sp, fn)} {seen} {ready}", f"{intro} {fit}"]
+        if pain:
+            body = [f"{hi_line(sp, fn)} {seen}", pain[0], f"{intro} {pain[1]}"]
+        else:
+            body = [f"{hi_line(sp, fn)} {seen} {ready}", f"{intro} {fit}"]
         tail = [links, " ".join(terms) + " " + cta]
         return "\n\n".join(body + (tail if sp(0, 1) == 0 else [tail[1].replace(cta, "").strip(), links, cta]))
     return unique("hot", build)
@@ -1182,12 +1192,16 @@ def main():
                                 manual.append(f"• {cut(hot_task(post['text']) or post['text'], 90)}\n  {link}")
                             continue
                         u, dn = target
-                        text = compose_hot(post, c["title"] or chn, dn)
-                        if autoreply.enabled():                 # письмо под конкретного клиента: вакансия + его био
-                            fm = autoreply.first_message(post["text"], u, dn)
-                            if fm and not fm["fit"]:
-                                log(f"не наш профиль, пропускаю @{u}: {fm['reason']}"); continue
-                            if fm: text = fm["text"]
+                        bio = USER_BIO.get(u.lower(), "")
+                        fm = autoreply.first_message(post["text"], u, dn, bio) if autoreply.llm_on() else None
+                        if fm and not fm["fit"]:
+                            log(f"не наш профиль, пропускаю @{u}: {fm['reason']}"); continue
+                        if fm: text = fm["text"]
+                        else:                                   # бесплатный режим: фильтр + боли по нише без ИИ
+                            ok, why = autoreply.rule_fit(post["text"])
+                            if not ok:
+                                log(f"не наш профиль, пропускаю @{u}: {why}"); continue
+                            text = compose_hot(post, c["title"] or chn, dn, bio)
                         st["hot_q"].append({"username": u, "display": dn, "post": link, "found": now, "uniq": 1,
                                             "text": text})
                         contacted.add(u.lower()); new += 1
@@ -1224,7 +1238,7 @@ def main():
                 # следим и за теми, кто уже ответил, но диалог ещё ведёт бот (auto_n) и не передан Егору
                 peers = {e["peer"]: u for u, e in st["sent"].items() if e.get("peer")
                          and e.get("crm") not in (crm.ST_REFUSED, crm.ST_AGREED) and not e.get("handoff")
-                         and (not e.get("replied") or e.get("auto_n"))}
+                         and (not e.get("replied") or e.get("auto_n") or e.get("pending"))}
                 if peers:
                     live(phase="проверяю, кто ответил")
                     try: got = web.scan_replies(peers)
@@ -1243,35 +1257,56 @@ def main():
                         link = [[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]]
                         with open(REPLIES, "a", encoding="utf-8") as f:
                             f.write(f"- {e['replied']} @{u} ({e.get('display', '')}) — {kind} — {crm.LABEL[verdict]} — «{snippet}» — https://t.me/{u}\n")
+                        autoon = s.get("autoreply", True)
+                        delay = random.uniform(*AUTO_DELAY)               # отвечаем не мгновенно — как живой человек
                         if verdict == crm.ST_REFUSED:
+                            e.pop("pending", None)
+                            if autoon and not e.get("bye"):               # вежливо закрываем — дверь остаётся открытой
+                                e["bye"] = 1; e["pending"] = {"text": autoreply.goodbye(), "due": now + delay, "bye": 1}
                             notify(f"❌ Отказ: {e.get('display', '')} (@{u})\n«{snippet}»", buttons=link, silent=True)
                             continue
-                        # автодиалог: только если есть ключ Claude, лимит не выбран и человек не готов к сделке
                         auto = None
-                        if (autoreply.enabled() and s.get("autoreply", True) and verdict != crm.ST_AGREED
-                                and e.get("auto_n", 0) < autoreply.MAX_AUTO):
-                            live(phase=f"пишу ответ @{u}")
-                            auto = autoreply.generate(e, snippet)
-                        sent_auto = False
+                        if autoon and e.get("auto_n", 0) < autoreply.max_auto():
+                            live(phase=f"готовлю ответ @{u}")
+                            auto = autoreply.generate(e, snippet, verdict)
                         if auto:
-                            try: rr = web.send_reply(u, e.get("peer"), auto["text"])
-                            except Limited: raise
-                            except Exception as ex: rr = "fail:" + str(ex)[:60]
-                            if rr == "sent":
-                                sent_auto = True; e["auto_n"] = e.get("auto_n", 0) + 1
-                                e["thread"].append({"who": "me", "text": auto["text"]})
-                                log(f"АВТООТВЕТ @{u}: {auto['text'][:80]}")
-                                if auto["handoff"] or e["auto_n"] >= autoreply.MAX_AUTO: e["handoff"] = True
-                        if verdict == crm.ST_AGREED or e.get("handoff") or not sent_auto:
-                            if verdict == crm.ST_AGREED: e["handoff"] = True
+                            e["pending"] = {"text": auto["text"], "due": now + delay, "src": auto.get("src", "")}
+                            if auto["handoff"] or e.get("auto_n", 0) + 1 >= autoreply.max_auto(): e["handoff"] = True
+                        else:
+                            e.pop("pending", None)
+                        if verdict == crm.ST_AGREED: e["handoff"] = True
+                        when = f"через {int(delay // 60) or 1} мин" + ("" if in_hours(AUTO_HOURS) else f", утром после {AUTO_HOURS[0]}:00 МСК")
+                        if verdict == crm.ST_AGREED or e.get("handoff") or not auto:
+                            e["handoff"] = True
                             head = "✅ СОГЛАСИЛСЯ" if verdict == crm.ST_AGREED else "🔥 ОТВЕТИЛ"
-                            extra = (f"\n\n🤖 Я уже ответил: «{auto['text'][:300]}»\nПричина передачи: {auto['reason']}" if sent_auto else "")
+                            extra = (f"\n\n🤖 Отвечу {when}: «{auto['text'][:300]}»\nДальше веди сам: {auto['reason']}" if auto else
+                                     "\n\n🤖 Тут нужен ты: вопрос нестандартный, сам не отвечаю.")
                             notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{extra}\n\n{kind}: {e.get('source', '')}\n\n"
-                                   f"Подключайся лично. Быстрый ответ — кнопками ниже:", buttons=reply_buttons(u))
-                        elif sent_auto:
-                            notify(f"🤖 Веду диалог с {e.get('display', '')} (@{u})\nОн: «{snippet[:200]}»\nЯ: «{auto['text'][:300]}»",
-                                   buttons=link, silent=True)
+                                   f"Быстрый ответ — кнопками ниже:", buttons=reply_buttons(u))
+                        else:
+                            notify(f"🤖 Веду диалог с {e.get('display', '')} (@{u})\nКлиент: «{snippet[:200]}»\n"
+                                   f"Отвечу {when}: «{auto['text'][:300]}»", buttons=link, silent=True)
                     save(); crm_sync()
+
+            # ---- 2б. отложенные автоответы (по одному за проход, только днём по Москве)
+            if web and in_hours(AUTO_HOURS):
+                for u, e in list(st["sent"].items()):
+                    p = e.get("pending")
+                    if not p or now < p["due"]: continue
+                    e.pop("pending", None)
+                    try: rr = web.send_reply(u, e.get("peer"), p["text"])
+                    except Limited: raise
+                    except Exception as ex: rr = "fail:" + str(ex)[:60]
+                    if rr == "sent":
+                        if not p.get("bye"): e["auto_n"] = e.get("auto_n", 0) + 1
+                        e.setdefault("thread", []).append({"who": "me", "text": p["text"]})
+                        log(f"АВТООТВЕТ @{u} [{p.get('src') or 'прощание'}]: {p['text'][:80]}")
+                    else:
+                        log(f"автоответ @{u} не ушёл: {rr}")
+                        notify(f"⚠️ Не смог отправить автоответ @{u} — ответь сам:\n«{p['text'][:300]}»",
+                               buttons=[[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]])
+                    save(); crm_sync()
+                    break
 
             # ---- 3. отправка: одно сообщение за раз, потом пауза
             limited = bool(st["limited_until"]) and st["limited_until"] > datetime.datetime.now().isoformat()
