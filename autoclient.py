@@ -67,6 +67,7 @@ HOT_SCAN_EVERY = 12 * 60
 REPLY_CHECK_EVERY = 60          # ответы проверяем каждую минуту: скорость ответа клиенту = деньги
 AUTO_DELAY = (70, 260)          # автоответ уходит через 1–4 мин, а не мгновенно
 AUTO_HOURS = (8, 23)            # автоответы — днём по Москве; ночные сообщения получат ответ утром
+WARM_DAYS, WARM_HOT, WARM_GAP = 3, 10, 420   # после ограничения: 3 дня не больше 10 откликов в день, пауза от 7 мин
 HOT_MAX_AGE_H = 36      # откликаемся только на посты не старше N часов
 FOLLOWUP_HOT_H = 24
 FOLLOWUP_COLD_H = 48
@@ -255,7 +256,7 @@ def notify(text, buttons=None, silent=False):
         log("бот не отправил уведомление:", str(e)[:80])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import crm, autoreply
+import crm, autoreply, guard
 
 def bot_token():
     global _BOT
@@ -342,7 +343,7 @@ def is_hot(text):
 
 def hot_contacts(post, channel):
     out = []
-    for u in post["links"] + re.findall(r"@([A-Za-z][A-Za-z0-9_]{4,31})", post["text"]):
+    for u in post["links"] + guard.tg_handles(post["text"]):      # без ников из ссылок Threads/Instagram и т. п.
         ul = u.lower()
         if ul == channel.lower() or ul in JUNK_NAMES or ul.endswith("bot") or ul in [x.lower() for x in out]: continue
         out.append(u)
@@ -777,6 +778,16 @@ class Web:
         except Exception:
             return False
 
+    def paid_only(self):
+        """Платные сообщения: Telegram просит звёзды за сообщение этому человеку."""
+        try:
+            txt = " ".join(self.page.locator(".chat-input:visible, .chat-input-wrapper:visible, .bubbles .empty-bubble-placeholder:visible")
+                           .all_inner_texts())
+            return bool(re.search(r"(\d+\s*)?(звёзд|звезд|stars?)\b.{0,40}(сообщ|message)|(сообщ|message).{0,40}(звёзд|звезд|stars?)\b|⭐",
+                                  txt, re.I))
+        except Exception:
+            return False
+
     def last_out(self):
         try:
             return self.page.evaluate("""() => { const b = [...document.querySelectorAll('.bubbles .bubble.is-out')].pop();
@@ -804,6 +815,8 @@ class Web:
         p = self.page
         if p.locator(f"{self.INPUT}:visible").count() == 0 or self.premium_only():
             return "skip:нельзя написать (закрыта личка / пишут только Premium)"
+        if self.paid_only():
+            return "skip:человек берёт звёзды за сообщения от незнакомых — значит, не ждёт их"
         before = self.last_out()["mid"]
         probe = re.sub(r"\s+", " ", EMOJI_RE.sub("", text))[:18]
         box = p.locator(f"{self.INPUT}:visible").first
@@ -1199,8 +1212,11 @@ def main():
                         if not post["when"] or (datetime.datetime.now(datetime.timezone.utc) - post["when"]).total_seconds() > HOT_MAX_AGE_H * 3600:
                             continue
                         if not is_hot(post["text"]): continue
+                        why = guard.no_dm(post["text"])
+                        if why: log(f"пропуск вакансии {post['id']}: {why}"); continue
                         allc = hot_contacts(post, chn)
-                        cands = [u for u in allc if u.lower() not in contacted and u.lower() not in bad]
+                        cands = [u for u in allc if u.lower() not in contacted and u.lower() not in bad
+                                 and not guard.contact_problem(post["text"], u, post["links"])]
                         target = None
                         for u in cands:
                             dn = user_page(u); time.sleep(random.uniform(0.8, 1.8))
@@ -1214,6 +1230,9 @@ def main():
                             continue
                         u, dn = target
                         bio = USER_BIO.get(u.lower(), "")
+                        why = guard.no_dm(bio)
+                        if why:
+                            bad.add(u.lower()); log(f"пропуск @{u}: в био {why}"); continue
                         fm = autoreply.first_message(post["text"], u, dn, bio) if autoreply.llm_on() else None
                         if fm and not fm["fit"]:
                             log(f"не наш профиль, пропускаю @{u}: {fm['reason']}"); continue
@@ -1343,13 +1362,20 @@ def main():
 
             # ---- 3. отправка: одно сообщение за раз, потом пауза
             limited = bool(st["limited_until"]) and st["limited_until"] > datetime.datetime.now().isoformat()
-            gap = lambda: max(10, int(s["gap"])) * random.uniform(1.0, 1.15)
+            if not limited and st["limited_until"]:                # ограничение только что истекло:
+                st["limited_until"] = ""; st["spam_check"] = ""    # перед первым сообщением — снова спросить @SpamBot
+                st.setdefault("warm_from", datetime.datetime.now().isoformat()); save()
+            # 3 дня после ограничения — мягкий разгон: мало откликов, длинные паузы, без холодных и дожимов
+            warm = bool(st.get("warm_from")) and (datetime.datetime.now() - datetime.datetime.fromisoformat(st["warm_from"])).days < WARM_DAYS
+            if st.get("warm_from") and not warm: st.pop("warm_from", None)
+            lim_hot = min(int(s["limit_hot"]), WARM_HOT) if warm else int(s["limit_hot"])
+            gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
                 job = None
-                if s["hot_on"] and in_hours(HOURS_HOT) and d["hot"] < s["limit_hot"]:
+                if s["hot_on"] and in_hours(HOURS_HOT) and d["hot"] < lim_hot:
                     st["hot_q"] = [x for x in st["hot_q"] if now - x["found"] < 48 * 3600]
                     if st["hot_q"]: job = ("hot", st["hot_q"][0])
-                if not job and in_hours(HOURS_COLD) and d["cold"] + d["fu"] < s["limit_cold"]:
+                if not job and not warm and in_hours(HOURS_COLD) and d["cold"] + d["fu"] < s["limit_cold"]:
                     if s["fu_on"]:
                         for u, e in st["sent"].items():
                             h = FOLLOWUP_HOT_H if e["kind"] == "hot" else FOLLOWUP_COLD_H
@@ -1392,6 +1418,12 @@ def main():
                         save()
                     else:
                         q = st["hot_q"] if kind == "hot" else st["cold_q"]
+                        risk = guard.check_before_send(kind, item)       # последняя проверка: тот ли человек и не против ли он
+                        if risk:
+                            q.pop(0); bad.add(item["username"].lower())
+                            log(f"НЕ ПИШУ @{item['username']}: {risk}"); save()
+                            next_send = time.time() + 5
+                            continue
                         try: r, peer = web.send_new(item["username"], item["text"])
                         except Limited: raise
                         except Exception as ex: r, peer = "fail:" + str(ex).splitlines()[0][:100], None
@@ -1485,12 +1517,17 @@ def main():
             time.sleep(2)
 
         except Limited as e:
-            st["limited_until"] = (datetime.datetime.now() + datetime.timedelta(hours=20)).isoformat()
+            txt = getattr(web, "spam_text", "") if web else ""
+            until = guard.spam_until(txt)                          # точная дата из ответа @SpamBot, если она есть
+            if not until or until < datetime.datetime.now() + datetime.timedelta(hours=1):
+                until = datetime.datetime.now() + datetime.timedelta(hours=20)
+            st["limited_until"] = max(st.get("limited_until") or "", until.isoformat())
+            st["warm_from"] = st["limited_until"]                  # после снятия — 3 дня мягкого разгона
             fails = 0; save()
             log("СТОП ОТПРАВКИ до", st["limited_until"][:16], "—", e)
-            txt = getattr(web, "spam_text", "") if web else ""
-            msg = (f"⛔ {e}. Новых сообщений незнакомым не шлю 20 ч — поиск заказов продолжается, "
-                   f"ответы клиентам и быстрые ответы работают.")
+            msg = (f"⛔ {e}. Новых сообщений незнакомым не шлю до {st['limited_until'][8:10]}.{st['limited_until'][5:7]} "
+                   f"{st['limited_until'][11:16]} — поиск заказов продолжается, ответы клиентам и быстрые ответы работают.\n"
+                   f"После снятия 3 дня разгоняюсь мягко: до {WARM_HOT} откликов в день, без холодных и дожимов.")
             if "SpamBot" in str(e) or re.search(r"к сожалению|ограничен|limited", txt, re.I):
                 s = S()
                 safe = dict(s, gap=max(int(s["gap"]), 180), limit_hot=min(int(s["limit_hot"]), 25),
