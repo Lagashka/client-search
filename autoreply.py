@@ -118,6 +118,11 @@ SELF_AD = re.compile(r"беру недорого|расширяю портфол
 ONSITE = re.compile(r"локация:|📍\s*локация|если свобод\w* \d|балаших|\d{1,2} (январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|"
                     r"октябр|ноябр|декабр)\w*.{0,80}(москв|спб|балаших)", re.I)
 
+CORE_EDIT = re.compile(r"монтаж|монтир|рилс.?мейкер|reels.?мейкер|video editor|editor|after effects|premiere|davinci|capcut|нарезк|клип|моуш|motion|подкаст", re.I)
+SHORT_VIDEO = re.compile(r"ролик|рилс|reels|shorts|шортс|тикток|tiktok|youtube|ютуб|вертикальн", re.I)
+NONSHORT = re.compile(r"кино|сериал|телевиден|\bтв\b|концерт|звукозапис|театр|геймдиз|радио|музыкальн\w* продюсер|битмейк", re.I)
+TARGET_ROLE = re.compile(r"таргетолог|smm.?менеджер|смм.?менеджер|маркетолог|директолог|ppc|трафик.?менеджер", re.I)
+
 def rule_fit(text):
     low = BOILER.sub("", text.lower()).strip()
     head = low[:250]
@@ -126,6 +131,13 @@ def rule_fit(text):
         if re.search(rx, low) and not re.search(r"монтаж\w* (видео|роликов|reels|рилс)|видеомонтаж", head):
             return False, why
     if not EDIT.search(low): return False, "главная задача не монтаж"
+    # --- защиты (баг 6): продюсер/сценарист из кино, ТВ, музыки; таргетолог/SMM, которым «нужны сценарии» ---
+    if re.search(r"продюсер|сценарист|сценари[йяюи]", low) and not CORE_EDIT.search(low) and not SHORT_VIDEO.search(low):
+        return False, "продюсер/сценарист не для коротких видео"
+    if NONSHORT.search(low) and not re.search(r"монтаж\w* (видео|роликов|reels|рилс)|видеомонтаж|рилс.?мейкер", head):
+        return False, "кино/ТВ/музыка/игры"
+    if TARGET_ROLE.search(head) and not re.search(r"монтаж|продюсер|рилс.?мейкер|reels.?мейкер", head):
+        return False, "ищут таргетолога/SMM/маркетолога"
     if ROLE_OTHER.search(head) and not EDIT.search(head): return False, "ищут SMM/съёмку, а не монтажёра"
     if len(set(m.group(0)[:6] for m in SMM_DUTY.finditer(low))) >= 2: return False, "SMM целиком (сторис, контент-план, ведение)"
     if re.search(r"клиппинг|оплата за результат|за просмотры", low): return False, "оплата за просмотры"
@@ -144,6 +156,10 @@ MEDIA = re.compile(r"^(видео|фото|файл|документ|голос�
                    r"отправ(ил|ила|ляю)|скинул|прикреп|лови|держите|вот исходник|вот материал|sending|sent you", re.I)
 BOTQ = re.compile(r"(ты|вы|это) бот|автоответ|робот|нейросеть пишет|chatgpt|чат.?гпт|ии пишет", re.I)
 BUDGET = re.compile(r"\d[\d\s]{2,6}\s*(₽|руб|р\b|к\b|тыс|\$|usd|долл)", re.I)
+EXISTING = re.compile(r"уже есть (свой )?(продюсер|монтаж|сценарист|видеограф|команда|подрядчик)|есть свой (продюсер|монтаж|сценарист|видеограф|команда)|"
+                      r"сами (делаем|монтируем|снимаем|пишем)|в штате|своя команда|работаем с (другим|одним) (монтаж|продюсер)", re.I)
+DISCOUNT = re.compile(r"скидк|дешевле|подешевле|торг|уступ|снизить цену|слишком дорого|дороговато|дорого", re.I)
+GUARANTEE = re.compile(r"гаранти|окупится|сколько (заявок|продаж|подписчиков)|какой результат|принесёт ли|будут ли продажи|вырастут ли", re.I)
 INTENTS = [
     ("price", re.compile(r"сколько|цен[аыу]|стоим|прайс|расценк|бюджет|price|how much|по деньгам", re.I),
      ["Основной формат — серия из 5 роликов под ключ: 19 000 ₽. Входит мини-стратегия, 5 сценариев (общая мысль, истории, золотая кнопка), раскадровка, монтаж и упаковка. Только сценарии и раскадровка без монтажа — 7 000 ₽. Если нужен один ролик, то от 3 000 ₽.",
@@ -192,6 +208,16 @@ def rule_reply(text, verdict):
         return None                                   # отказ: прощание шлёт autoclient, «обсудим детали» — никогда
     if BOTQ.search(t):
         return {"text": "Это мой автоответчик 🙂 Егор подключится лично в ближайшее время.", "handoff": True, "reason": "спросили про бота", "src": "rules"}
+    if EXISTING.search(t):      # баг 8: у человека уже есть свой продюсер/монтажёр: не продаём, решает Егор
+        return {"text": random.choice(["Понял, спасибо, что ответили! Если понадобится свежий взгляд на сценарии или лишние руки на монтаже, я на связи.",
+                                       "Хорошо, спасибо! Если появится объём, с которым команда не справляется, пишите."]),
+                "handoff": True, "reason": "уже есть свой продюсер/монтажёр: не продаём", "src": "rules"}
+    if DISCOUNT.search(t):      # баг 10: торг или скидка: сами не уступаем, места проверяет Егор
+        return {"text": "Для первых трёх клиентов действует скидка 20% на сценарный пакет и серию, взамен прошу разрешение показать кейс и отзыв. Уточню, остались ли места, и вернусь с точной цифрой.",
+                "handoff": True, "reason": "просит скидку: проверить свободные места", "src": "rules"}
+    if GUARANTEE.search(t):     # баг 9: просят гарантию результата: честно отвечаем, что продажи не гарантируем
+        return {"text": "Честно: не могу гарантировать продажи или рост подписчиков, это зависит от продукта и регулярных публикаций. Гарантирую другое: сроки, работу по раскадровке, 2 круга правок, а при просрочке по моей вине скидка 20% на ролик. Что вы продаёте и кому? Покажу, как это выглядело бы серией роликов.",
+                "handoff": False, "reason": "гарантии: честный ответ", "src": "rules"}
     if MEDIA.search(t):
         return {"text": random.choice(["Получил, спасибо! Посмотрю и вернусь с ответом.", "Спасибо, получил. Скоро вернусь."]),
                 "handoff": True, "reason": "прислали материал", "src": "rules"}
@@ -347,14 +373,31 @@ def _llm(system, messages, max_tokens=700):
                 LAST_ERR[name] = str(e)[:200]; break
     return None, None
 
-def _sane(txt, ctx=""):
-    """Страховка от выдумок ИИ: цена ниже прайса, «привет», прощания. ctx — слова клиента: его цифры (напр. «1500») можно повторить."""
+ALLOWED_PRICES = {300, 1000, 3000, 3600, 5000, 5600, 7000, 8000, 15200, 19000, 31200, 50000, 80000}   # прайс 3.0
+_BAD_GUARANTEE = re.compile(r"(?<!не )(?<!не могу )гарантир\w* (рост|продаж|результат|заяв|подписчик|просмотр|окупаем)|\d+\s?% (рост|больше|заявок|продаж)|в \d+ раз(а)? (больше|выше)|точно (окупит|вырастут|принесут)", re.I)
+_OLD_MEANING = re.compile(r"связанн\w* (ролик|сценар)|открыт\w* петл|цепочк\w* (из )?роликов|золот\w* кнопк\w*[^.\n]{0,60}(главн\w* момент|хочется купить|подводит к покупке)", re.I)
+_EARLY_TIERS = re.compile(r"50 ?000|39 ?000|продюсер на месяц", re.I)
+_OUT_OF_SCOPE = re.compile(r"(?<!не )(сниму|выеду|приеду|запущу (рекламу|таргет)|настрою (рекламу|таргет)|веду (ваши )?(соцсет|аккаунт|инстаграм)|сделаю сайт|раскручу|продвину (аккаунт|канал))|съёмк\w* на месте", re.I)
+_JUNK = re.compile(r"\bnull\b|\bNone\b|undefined|\{\{|\}\}|</?[a-z]+>", re.I)
+
+def _sane(txt, ctx="", first=False, discount_ok=False):
+    """Страховка от выдумок ИИ. ctx — слова клиента: его цифры можно повторить.
+    first=True для первых писем и дожимов: там нельзя называть месячный пакет, а скидку — только в варианте C холодного письма."""
     theirs = {re.sub(r"\D", "", x) for x in re.findall(r"\d[\d\s ]{0,6}", ctx)}
     for a in re.findall(r"(\d[\d\s ]{0,6})\s*₽", txt):
         v = re.sub(r"\D", "", a) or "0"
-        if int(v) < 3000 and v not in theirs: return False
-    if re.search(r"(?<![\d–-])[2-9]\s?[–-]\s?[3-9]\s*(дня|дней|суток)", txt): return False        # сроки только из фактов: 1–2 дня / 24 ч
+        if int(v) not in ALLOWED_PRICES and v not in theirs: return False                 # баг 1: цена не из прайса 3.0 (старая, придуманная, ниже прайса)
+    for m in re.finditer(r"скидк\w*\s*(?:в|на|—|-|–)?\s*(\d+)\s*%|(\d+)\s*%\s*скидк", txt, re.I):
+        if int(m.group(1) or m.group(2)) != 20: return False                               # баг 10: придуманная скидка, кроме 20%
+    if _BAD_GUARANTEE.search(txt): return False                                            # баг 2: обещание гарантированного результата
+    if _OLD_MEANING.search(txt): return False                                              # баг 3: старое (неверное) понимание серии и золотой кнопки
+    if _OUT_OF_SCOPE.search(txt): return False                                             # баг 5: обещает то, что мы не делаем
+    if first:                                                                              # баг 4: в первом письме нельзя «продюсер на месяц» и скидки
+        if _EARLY_TIERS.search(txt): return False
+        if not discount_ok and re.search(r"скидк|первым трём|первым 3", txt, re.I): return False
+    if re.search(r"(?<![\d–-])[2-9]\s?[–-]\s?[3-9]\s*(дня|дней|суток)", txt) and "5–7" not in txt and "2–4" not in txt: return False   # сроки только из фактов
     if "Долги без паники" in txt or "стиль-шаблон под вас" in txt and "прошлый монтажёр пропал" in txt: return False   # слепое копирование примера из промпта
+    if _JUNK.search(txt): return False                                                     # мусор из ответа модели (None, null, {{ }}, теги)
     return not re.search(r"(^|\s)привет\b|хорошего дня|удачного дня|удачный день|\*\*|json", txt, re.I)
 
 def _bio(username):
@@ -373,7 +416,7 @@ def first_message(vacancy, username, display, bio=None):
     j, _ = _llm(FIRST, [{"role": "user", "content": f"Автор: {display} (@{username})\nБио: {bio if bio is not None else _bio(username) or 'нет'}\n\nВакансия:\n{vacancy[:2500]}"}])
     if not j: return None
     txt = str(j.get("text", "")).strip()
-    if len(txt) < 120 or len(txt) > 1500 or "zakulisy715" not in txt or not _sane(txt): return None   # → письмо по правилам
+    if len(txt) < 120 or len(txt) > 1500 or "zakulisy715" not in txt or not _sane(txt, first=True): return None   # → письмо по правилам
     return {"fit": True, "reason": str(j.get("reason", ""))[:120], "text": txt}
 
 def cold_message(ch, display, niche, variant):
@@ -391,7 +434,7 @@ def cold_message(ch, display, niche, variant):
     j, _ = _llm(COLD, [{"role": "user", "content": dossier}])
     if not j: return None
     txt = str(j.get("text", "")).strip()
-    if len(txt) < 200 or len(txt) > 1500 or "zakulisy715" not in txt or not _sane(txt): return None
+    if len(txt) < 200 or len(txt) > 1500 or "zakulisy715" not in txt or not _sane(txt, first=True, discount_ok=(str(variant) == "C")): return None
     if re.search(r"просмотр\w*\s*[—:-]?\s*0(?!\d)|\b0 подписчик|я снимаю|досье|здравствуйте,? (эксперт|команда|ипотечный|ан\b)|\d+.секундн", txt, re.I): return None   # выдумки/канцелярит
     if not re.search(r"Я Егор|Меня зовут Егор|Егор, монтаж", txt): return None                    # представиться обязательно
     return txt
@@ -403,7 +446,7 @@ def followup_message(e):
     j, _ = _llm(FOLLOW, [{"role": "user", "content": f"Вид: {kind}\nИмя: {e.get('display', '')}\nИсточник: {e.get('source', '')}\n\nПервое письмо:\n{(e.get('text') or '')[:1200]}"}], 300)
     if not j: return None
     txt = str(j.get("text", "")).strip()
-    if len(txt) < 25 or len(txt) > 500 or not _sane(txt): return None
+    if len(txt) < 25 or len(txt) > 500 or not _sane(txt, first=True): return None
     return txt
 
 def max_auto():
@@ -411,6 +454,10 @@ def max_auto():
 
 def generate(e, their_text, verdict=""):
     """Ответ на сообщение клиента: ИИ, если есть ключ, иначе правила. None — отвечать должен Егор."""
+    tt = their_text or ""
+    if EXISTING.search(tt) or DISCOUNT.search(tt) or GUARANTEE.search(tt):     # баги 8-10: скидки, гарантии и «уже есть свой» ИИ не доверяем
+        r = rule_reply(their_text, verdict)
+        if r: return r
     if llm_on():
         thread = [{"role": "assistant", "content": e.get("text", "")}]
         for h in e.get("thread", [])[:-1]:
