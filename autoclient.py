@@ -88,7 +88,7 @@ def bot_out(e):
 def add_out(e, parts):
     """Записать, что бот отправил ещё N сообщений. Вызывать до изменения e['fu'] и e['thread']."""
     e["n_out"] = (e["n_out"] if "n_out" in e else _legacy_out(e)) + max(int(parts or 1), 1)
-WARM_DAYS, WARM_HOT, WARM_GAP = 3, 10, 420   # после ограничения: 3 дня не больше 10 откликов в день, пауза от 7 мин
+WARM_DAYS, WARM_HOT, WARM_GAP = 3, 100, 180  # после ограничения: 3 дня без холодных и дожимов; откликов на вакансии (Егор 09.11) не меньше 40 в день, лимит как в настройках, пауза от 3 мин
 HOT_MAX_AGE_H = 36      # откликаемся только на посты не старше N часов
 FOLLOWUP_HOT_H = 24
 FOLLOWUP_COLD_H = 48
@@ -480,13 +480,14 @@ def compose_hot(post, ch_title, display, bio=""):
                       "Работаю по ТЗ, в одном стиле и в срок, короткий ролик за 1–2 дня")
         m2 = f"{understand}. {mine}"
         extra = sp("Я не только монтирую, а продюсирую ролики под ключ: стратегия, сценарии, раскадровка и монтаж, можно взять весь цикл или только монтаж",
+                   "Продюсирую ролики под ключ, не только монтаж: сценарии, раскадровка, хук и звук, а если нужен один монтаж, беру его отдельно",
                    "Веду проект под ключ, как продюсер: сценарии, раскадровка, монтаж, можно взять весь цикл или только монтаж",
                    "Беру ролики под ключ как продюсер: стратегия, сценарии, раскадровка и монтаж, а если нужен только монтаж, делаю его одним")
         if shoot: extra += ". " + sp("Съёмку не беру, снимаете вы на телефон, остальное беру на себя",
                                      "Снимаете вы на телефон, а сценарий, раскадровку и монтаж беру на себя")
-        offer = sp("Могу бесплатно сделать 10–15 секунд из вашего материала, глянете уровень, а там решим вопрос",
-                   "Предлагаю так, сделаю тест на 10–15 секунд бесплатно, а там сами глянете, подходит или нет",
-                   "Могу для начала бесплатно смонтировать 10–15 секунд, а там уже сами глянете, нужно вам такое или нет")
+        offer = sp("Могу бесплатно сделать 10–15 секунд из вашего материала за сутки, глянете уровень, а там решим вопрос",
+                   "Предлагаю так, сделаю тест на 10–15 секунд бесплатно, за сутки после исходника, а там сами глянете, подходит или нет",
+                   "Могу для начала бесплатно смонтировать 10–15 секунд за сутки, а там уже сами глянете, нужно вам такое или нет")
         ask = sp("Какой формат у вас сейчас?", "К какому числу нужен первый ролик?", "Скинете исходник?")
         lines = [f"{offer}. {extra}. {ask}"]
         if price: lines.append("По цене: серия из 5 роликов под ключ 19 000 ₽, отдельный монтаж от 3 000 ₽")
@@ -507,6 +508,31 @@ def followup_text(entry):
                                 "не хочу быть навязчивым, поэтому коротко: если видео сейчас не в планах, просто ответьте «нет», а если в планах, покажу схему серии под вашу тему",
                                 "пишу ещё раз, последний) предложение в силе, могу бесплатно показать, как ваш пост выглядел бы роликом, а если не актуально, так и напишите")
     return autoreply.voicefy(unique("fu-" + entry["kind"], build))
+
+TOUCH3_D, TOUCH7_D = 3, 4      # касания после названной цены: через 3 дня, потом ещё через 4 (на 7-й день)
+
+def touch_due(e, now):
+    """'t3' / 't7' / None: пора ли коснуться того, кому уже назвали цену, а он молчит. Только тем, с кем диалог ведёт бот."""
+    pts = e.get("price_ts")
+    if not pts or not e.get("peer") or e.get("human") or e.get("handoff") or e.get("bye"): return None
+    if e.get("crm") in ("agreed", "refused"): return None
+    if e.get("last_in_ts", 0) > pts: return None                # после цены он что-то написал: ведём по ответам
+    if not e.get("t3"):
+        return "t3" if now - pts >= TOUCH3_D * 86400 and now - pts < 10 * 86400 else None
+    if e.get("t3") == "skip" or e.get("t7"): return None
+    return "t7" if now - e.get("t3_ts", now) >= TOUCH7_D * 86400 else None
+
+def touch_text(entry, which):
+    fn = first_name(entry.get("display", ""))
+    def build(sp):
+        hi = sp("добрый день", "здравствуйте")
+        lead = f"{fn}, {hi}" if fn else hi.capitalize()
+        if which == "t3":
+            return lead + ", " + sp("вернусь по вашему проекту: могу до оплаты прислать карту серии на одну страницу за 24 часа, не подойдёт, платить ничего не нужно. Набросать?",
+                                    "по вашему проекту предложение в силе: до оплаты пришлю карту серии (5 тем и золотая кнопка) за 24 часа, не подойдёт, ничего не должны. Присылать?")
+        return lead + ", " + sp("последний раз побеспокою) если сейчас не актуально, так и напишите, закрою вопрос, а если актуально, держу за вами место ещё пару дней. Да или нет?",
+                                "пишу в последний раз, чтобы не надоедать: если тема не ваша, ответьте «нет», и я закрою вопрос, если ваша, место за вами ещё на пару дней. Да или нет?")
+    return autoreply.voicefy(unique("touch-" + which, build))
 
 def niche_of(title, desc, body):
     t1 = (title + " " + desc).lower(); t2 = body.lower()
@@ -596,8 +622,8 @@ def compose_cold(ch, display, niche, variant):
                  "Я Егор, веду ролики для экспертов под ключ как продюсер (стратегия, сценарии, раскадровка, монтаж)")
         offer = {"A": sp("Предлагаю так, бесплатно набросаю схему серии из 5 роликов под ваш канал, а вы глянете, подходит или нет. Скинуть?",
                          "Могу бесплатно расписать серию из 5 роликов по вашим темам, а там уже сами глянете, нужно вам такое или нет. Скинуть?"),
-                 "B": sp("Могу бесплатно смонтировать 15 секунд из вашего видео, а там сами глянете, нужно вам такое или нет. Скинете исходник?",
-                         "Предлагаю так, бесплатно сделаю 15 секунд из вашего видео, сравните сами) пришлёте любой исходник?"),
+                 "B": sp("Могу бесплатно смонтировать 15 секунд из вашего видео за сутки, а там сами глянете, нужно вам такое или нет. Скинете исходник?",
+                         "Предлагаю так, бесплатно сделаю 15 секунд из вашего видео за сутки, сравните сами) пришлёте любой исходник?"),
                  "C": sp("Серия из 5 роликов под ключ стоит 19 000 ₽, беру не больше 5 клиентов в месяц, сейчас есть место. Обсудим?",
                          "Серия из 5 роликов под ключ, 19 000 ₽, постоянных клиентов беру не больше пяти, сейчас есть окно. Интересно?")}[variant]
         proof = f"Пример по ипотеке: {CASE}" if case_fits else f"Работы здесь: {PORTFOLIO}"
@@ -1321,7 +1347,7 @@ def main():
                         if snippet and snippet == e.get("last_in"): continue      # это сообщение уже обработано
                         first = not e.get("replied")
                         if first: e["replied"] = datetime.datetime.now().isoformat(timespec="minutes")
-                        e["last_in"] = snippet
+                        e["last_in"] = snippet; e["last_in_ts"] = time.time()
                         e.setdefault("thread", []).append({"who": "them", "text": snippet})
                         kind = "вакансия" if e["kind"] == "hot" else f"холодное, вариант {e.get('variant')}"
                         verdict = crm.classify(snippet)
@@ -1377,6 +1403,7 @@ def main():
                         if not p.get("bye"): e["auto_n"] = e.get("auto_n", 0) + 1
                         add_out(e, getattr(web, "last_parts", 1) or 1)
                         e.setdefault("thread", []).append({"who": "me", "text": p["text"]})
+                        crm.note_offer(e, p["text"])                  # цена названа / закрывающий вопрос задан (для касаний и CRM)
                         log(f"АВТООТВЕТ @{u} [{p.get('src') or 'прощание'}]: {p['text'][:80]}")
                     elif rr.startswith("skip:ответил сам"):
                         e["human"] = True                      # диалог взял Егор: бот в нём больше не пишет
@@ -1410,6 +1437,10 @@ def main():
                             age = now - e.get("ts", now)
                             if not e.get("replied") and not e.get("fu") and e.get("peer") and h * 3600 < age < 7 * 86400:
                                 job = ("fu", u); break
+                        if not job:                                    # касания на 3-й и 7-й день тем, кому назвали цену, а он молчит
+                            for u, e in st["sent"].items():
+                                tm = touch_due(e, now)
+                                if tm: e["_tm"] = tm; job = ("fu", u); break
                     if not job and s["cold_on"] and st["cold_q"]: job = ("cold", st["cold_q"][0])
                 if not job: live(phase="жду", why=why_idle(s, d, limited), next_send=0)
                 else: live(phase=f"пишу @{job[1] if job[0] == 'fu' else job[1]['username']}")
@@ -1433,16 +1464,22 @@ def main():
                         if ok is False: raise Limited("@SpamBot сообщает об ограничении аккаунта")
                     if kind == "fu":
                         e = st["sent"][item]
-                        try: r = web.send_followup(item, e["peer"], autoreply.followup_message(e) or followup_text(e), known_out=e.get("n_out", 1))
+                        tm = e.pop("_tm", None)                        # t3 / t7 — касание после цены; иначе обычный дожим
+                        try: r = web.send_followup(item, e["peer"], touch_text(e, tm) if tm else (autoreply.followup_message(e) or followup_text(e)), known_out=e.get("n_out", 1))
                         except Limited: raise
                         except Exception as ex: r = "fail:" + str(ex).splitlines()[0][:100]
                         if r == "replied":
                             e["replied"] = datetime.datetime.now().isoformat(timespec="minutes"); log("уже ответил:", item)
+                            if tm: e[tm] = "skip"
                         elif r == "sent":
-                            add_out(e, getattr(web, "last_parts", 1) or 1); e["fu"] = today(); d["fu"] += 1; fails = 0; log(f"ДОЖИМ отправлен: @{item}")
+                            add_out(e, getattr(web, "last_parts", 1) or 1); d["fu"] += 1; fails = 0
+                            if tm: e[tm] = today(); e[tm + "_ts"] = time.time(); log(f"КАСАНИЕ {tm} отправлено: @{item}")
+                            else: e["fu"] = today(); log(f"ДОЖИМ отправлен: @{item}")
                             next_send = time.time() + gap()
                         else:
-                            e["fu"] = "skip"; log("дожим пропущен:", item, r)
+                            if tm: e[tm] = "skip"
+                            else: e["fu"] = "skip"
+                            log("дожим пропущен:", item, r)
                             if "не одно наше" in r: e["human"] = True        # Егор дописал в чат сам: бот в нём больше не пишет
                         save()
                     else:
