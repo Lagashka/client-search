@@ -48,6 +48,16 @@ def mark(e, new_status, text=None):
                                         "msg": (text or "")[:160]})
     e["history"] = e["history"][-30:]
 
+PRICE_RX = re.compile(r"\d[\d\s]*\s*₽|\d\s*(?:руб|тыс)", re.I)
+
+def note_offer(e, text):
+    """Исходящее сообщение клиенту: отмечаем, когда назвали цену и когда задали закрывающий вопрос (для касаний 3-го и 7-го дня)."""
+    t = (text or "").strip()
+    if PRICE_RX.search(t) and not e.get("price_ts"):
+        e["price_ts"] = time.time(); e["price_named"] = datetime.date.today().isoformat()
+    if e.get("price_ts") and not e.get("close_q") and t.rstrip().endswith("?") and PRICE_RX.search(t) is not None:
+        e["close_q"] = datetime.date.today().isoformat()
+
 def funnel(st):
     now = time.time(); c = {k: 0 for k in LABEL}
     for e in st["sent"].values(): c[status(e, now)] += 1
@@ -83,10 +93,13 @@ def write_files(st, base):
         open(os.path.join(base, "БАЗА ЛИДОВ.md"), "w", encoding="utf-8").write("\n".join(md) + "\n")
         with open(os.path.join(base, "leads.csv"), "w", encoding="utf-8-sig", newline="") as fh:
             w = csv.writer(fh, delimiter=";")
-            w.writerow(["статус", "имя", "username", "тип", "отправлено", "ответил", "последний ответ", "автоответов", "источник", "ссылка"])
+            w.writerow(["статус", "имя", "username", "тип", "отправлено", "ответил", "последний ответ", "автоответов", "источник", "ссылка",
+                        "цена названа", "закрывающий вопрос", "касание 3 дня", "касание 7 дней"])
             for r in rows:
+                e = st["sent"].get(r["username"], {})
                 w.writerow([LABEL[r["status"]], r["name"], r["username"], r["kind"], r["sent"], r["replied"], r["last_reply"],
-                            r["auto_replies"], r["source"], r["link"]])
+                            r["auto_replies"], r["source"], r["link"],
+                            e.get("price_named", ""), e.get("close_q", ""), e.get("t3", ""), e.get("t7", "")])
     except Exception: pass
 
 def board_text(st):
@@ -96,7 +109,8 @@ def board_text(st):
              f"📤 отправлено {f['total']}  💬 ответили {f['answered']} ({f['reply_rate']})",
              f"🔥 горячие {c[ST_INTEREST]}  ✅ согласились {c[ST_AGREED]}  ❌ отказ {c[ST_REFUSED]}",
              f"😶 молчат {c[ST_SILENT]}  ⏳ ждём {c[ST_SENT]}",
-             f"🎯 конверсия: ответ {f['reply_rate']} → тёплый {f['warm_rate']} → сделка {f['close_rate']}"]
+             f"🎯 конверсия: ответ {f['reply_rate']} → тёплый {f['warm_rate']} → сделка {f['close_rate']}",
+             f"💰 цена названа {sum(1 for e in st['sent'].values() if e.get('price_ts'))}  ❓ закрывающий вопрос {sum(1 for e in st['sent'].values() if e.get('close_q'))}"]
     if hot:
         lines += ["", "Сейчас в работе:"] + [f"{LABEL[r['status']][:2]} {r['name']} @{r['username']} — {r['last_reply'][:50]}" for r in hot]
     if st.get("diag"): lines += ["", st["diag"]]
