@@ -65,7 +65,7 @@ HOT_DISCOVER_EVERY = 2 * 3600   # как часто искать новые ка
 HOURS_COLD = (10, 20)   # часы по Москве для холодных
 HOT_SCAN_EVERY = 12 * 60
 REPLY_CHECK_EVERY = 60          # ответы проверяем каждую минуту: скорость ответа клиенту = деньги
-AUTO_DELAY = (70, 260)          # автоответ уходит через 1–4 мин, а не мгновенно
+AUTO_DELAY = (1800, 1860)        # автоответ уходит только через 30 минут и только если Егор за это время сам не ответил
 AUTO_HOURS = (8, 23)            # автоответы — днём по Москве; ночные сообщения получат ответ утром
 WARM_DAYS, WARM_HOT, WARM_GAP = 3, 10, 420   # после ограничения: 3 дня не больше 10 откликов в день, пауза от 7 мин
 HOT_MAX_AGE_H = 36      # откликаемся только на посты не старше N часов
@@ -803,6 +803,14 @@ class Web:
         except Exception:
             return {"mid": "", "text": "", "cls": ""}
 
+    def last_is_out(self):
+        """True, если последнее сообщение в открытом чате наше (Егор ответил сам или бот уже писал)."""
+        try:
+            return bool(self.page.evaluate("""() => { const l = [...document.querySelectorAll('.bubbles .bubble.is-in, .bubbles .bubble.is-out')].pop();
+                return !!(l && l.classList.contains('is-out')); }"""))
+        except Exception:
+            return False
+
     def clear_input(self):
         """Стереть текст в поле ввода, чтобы неотправленное сообщение не осталось черновиком в чате."""
         p = self.page
@@ -878,10 +886,11 @@ class Web:
         if out or inn: return "skip:переписка уже была", info
         return self.type_and_send(text), info
 
-    def send_reply(self, username, peer_id, text):
-        """Ответ в уже идущей переписке (быстрые ответы из бота)."""
+    def send_reply(self, username, peer_id, text, auto=False):
+        """Ответ в уже идущей переписке. auto=True — автоответ: пишем только если последнее сообщение в чате от клиента."""
         st, info = self.open_chat(username, peer_id)
         if st != "ok": return f"{st}:{info}"
+        if auto and self.last_is_out(): return "skip:ответил сам"
         return self.type_and_send(text)
 
     def send_followup(self, username, peer_id, text):
@@ -1320,12 +1329,12 @@ def main():
                         delay = random.uniform(*AUTO_DELAY)               # отвечаем не мгновенно — как живой человек
                         if verdict == crm.ST_REFUSED:
                             e.pop("pending", None)
-                            if autoon and not e.get("bye"):               # вежливо закрываем — дверь остаётся открытой
+                            if autoon and not e.get("bye") and not e.get("human"):               # вежливо закрываем — дверь остаётся открытой
                                 e["bye"] = 1; e["pending"] = {"text": autoreply.goodbye(), "due": now + delay, "bye": 1}
                             notify(f"❌ Отказ: {e.get('display', '')} (@{u})\n«{snippet}»", buttons=link, silent=True)
                             continue
                         auto = None
-                        if autoon and e.get("auto_n", 0) < autoreply.max_auto():
+                        if autoon and not e.get("human") and e.get("auto_n", 0) < autoreply.max_auto():
                             live(phase=f"готовлю ответ @{u}")
                             auto = autoreply.generate(e, snippet, verdict)
                         if auto:
@@ -1336,7 +1345,7 @@ def main():
                         # согласие: если ИИ сам дал реквизиты (pay.txt), диалог ведёт дальше до скрина оплаты
                         if verdict == crm.ST_AGREED and not (auto and auto.get("src") != "rules" and autoreply.pay_info()):
                             e["handoff"] = True
-                        when = f"через {int(delay // 60) or 1} мин" + ("" if in_hours(AUTO_HOURS) else f", утром после {AUTO_HOURS[0]}:00 МСК")
+                        when = f"через {int(delay // 60) or 1} мин, если ты не ответишь сам" + ("" if in_hours(AUTO_HOURS) else f", утром после {AUTO_HOURS[0]}:00 МСК")
                         if verdict == crm.ST_AGREED or e.get("handoff") or not auto:
                             if e.get("handoff") or not auto: e["handoff"] = True
                             head = "✅ СОГЛАСИЛСЯ" if verdict == crm.ST_AGREED else "🔥 ОТВЕТИЛ"
@@ -1355,13 +1364,16 @@ def main():
                     p = e.get("pending")
                     if not p or now < p["due"]: continue
                     e.pop("pending", None)
-                    try: rr = web.send_reply(u, e.get("peer"), p["text"])
+                    try: rr = web.send_reply(u, e.get("peer"), p["text"], auto=True)
                     except Limited: raise
                     except Exception as ex: rr = "fail:" + str(ex)[:60]
                     if rr == "sent":
                         if not p.get("bye"): e["auto_n"] = e.get("auto_n", 0) + 1
                         e.setdefault("thread", []).append({"who": "me", "text": p["text"]})
                         log(f"АВТООТВЕТ @{u} [{p.get('src') or 'прощание'}]: {p['text'][:80]}")
+                    elif rr.startswith("skip:ответил сам"):
+                        e["human"] = True                      # диалог взял Егор: бот в нём больше не пишет
+                        log(f"автоответ @{u} отменён: в чате уже ответили сами")
                     else:
                         log(f"автоответ @{u} не ушёл: {rr}")
                         notify(f"⚠️ Не смог отправить автоответ @{u} — ответь сам:\n«{p['text'][:300]}»",
