@@ -124,9 +124,12 @@ class TgCloud(BotLink):
             return "skip:переписка уже была", str(ent.id)
         return self._send(ent, text), str(ent.id)
 
-    def send_reply(self, username, peer_id, text):
+    def send_reply(self, username, peer_id, text, auto=False):
         ent, why = self._user(username)
         if not ent: return f"skip:{why}"
+        if auto:
+            last = self.c.get_messages(ent, limit=1)
+            if last and last[0].out: return "skip:ответил сам"
         return self._send(ent, text)
 
     def send_followup(self, username, peer_id, text):
