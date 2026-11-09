@@ -886,11 +886,14 @@ class Web:
         if out or inn: return "skip:переписка уже была", info
         return self.type_and_send(text), info
 
-    def send_reply(self, username, peer_id, text, auto=False):
-        """Ответ в уже идущей переписке. auto=True — автоответ: пишем только если последнее сообщение в чате от клиента."""
+    def send_reply(self, username, peer_id, text, auto=False, known_out=None):
+        """Ответ в уже идущей переписке. auto=True — автоответ: бот пишет, только если Егор в этом чате не писал вообще:
+        последнее сообщение от клиента и исходящих не больше, чем отправил сам бот (known_out)."""
         st, info = self.open_chat(username, peer_id)
         if st != "ok": return f"{st}:{info}"
-        if auto and self.last_is_out(): return "skip:ответил сам"
+        if auto:
+            if self.last_is_out(): return "skip:ответил сам"
+            if known_out is not None and self.bubbles()[0] > known_out: return "skip:ответил сам"
         return self.type_and_send(text)
 
     def send_followup(self, username, peer_id, text):
@@ -1364,7 +1367,9 @@ def main():
                     p = e.get("pending")
                     if not p or now < p["due"]: continue
                     e.pop("pending", None)
-                    try: rr = web.send_reply(u, e.get("peer"), p["text"], auto=True)
+                    known = (1 + (1 if e.get("fu") and e.get("fu") != "skip" else 0) + len(e.get("my", []))
+                             + sum(1 for m in e.get("thread", []) if m.get("who") == "me"))      # первое письмо + дожим + быстрые ответы + автоответы
+                    try: rr = web.send_reply(u, e.get("peer"), p["text"], auto=True, known_out=known)
                     except Limited: raise
                     except Exception as ex: rr = "fail:" + str(ex)[:60]
                     if rr == "sent":
@@ -1436,6 +1441,7 @@ def main():
                             next_send = time.time() + gap()
                         else:
                             e["fu"] = "skip"; log("дожим пропущен:", item, r)
+                            if "не одно наше" in r: e["human"] = True        # Егор дописал в чат сам: бот в нём больше не пишет
                         save()
                     else:
                         q = st["hot_q"] if kind == "hot" else st["cold_q"]
