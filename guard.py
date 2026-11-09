@@ -53,6 +53,25 @@ def no_dm(text):
     m = NO_DM.search(text or "")
     return f"просит не писать в личку / грозит жалобой («{m.group(0)[:40]}»)" if m else ""
 
+# ---------- 3. «отклик по кнопке / форме»: человеку в личку писать нечем, такие вакансии пропускаем ----------
+BUTTON_APPLY = re.compile(
+    r"отклик\w*\s+(можно\s+)?(по|через|на)\s+кнопк\w*|(жми|нажм\w+|нажимай\w*)\s+(на\s+)?кнопк\w*|кнопк\w+\s+(ниже|под\s+постом|внизу)|"
+    r"по\s+кнопке\s+(ниже|под)|откликн\w+\s+(по\s+)?кнопк\w*|заполн\w+\s+(анкету|форму)\s+(по\s+)?(кнопк|ссылк)\w*|"
+    r"оставь\w*\s+заявк\w*\s+(по\s+)?кнопк\w*", re.I)
+APPLY_BTN_LABEL = re.compile(r"отклик|заявк|анкет|форма|заполн|резюме|apply|подать|связаться", re.I)
+HUMAN_TME = re.compile(r"https?://t\.me/([A-Za-z][A-Za-z0-9_]{4,31})/?(\?.*)?$", re.I)
+
+def apply_by_button(text, buttons=()):
+    """'' — можно; иначе причина: в тексте сказано «откликайтесь по кнопке/форме» или под постом кнопка отклика на сайт, форму, бот."""
+    m = BUTTON_APPLY.search(text or "")
+    if m: return f"отклик по кнопке или форме («{m.group(0)[:40]}»)"
+    for url, label in (buttons or ()):
+        hm = HUMAN_TME.match(url or "")
+        human = bool(hm) and not hm.group(1).lower().endswith("bot")
+        if not human and APPLY_BTN_LABEL.search(label or ""):
+            return f"отклик по кнопке «{(label or '')[:30]}»"
+    return ""
+
 # ---------- проверка прямо перед отправкой (для всего, что лежит в очереди) ----------
 def _get(url):
     try:
