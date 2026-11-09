@@ -101,10 +101,16 @@ class TgCloud(BotLink):
             return None, "это не личный аккаунт"
         return ent, ""
 
-    def _send(self, ent, text):
+    def _send(self, ent, text, split=False):
+        import random, re, time
         from telethon import errors
+        parts = [x.strip() for x in re.split(r"\n\s*\n", text or "") if x.strip()] if split else [text]
+        if len(parts) > 4: parts = parts[:3] + ["\n".join(parts[3:])]
+        self.last_parts = 0
         try:
-            self.c.send_message(ent, text)
+            for i, part in enumerate(parts or [text]):
+                if i: time.sleep(random.uniform(5, 10))
+                self.c.send_message(ent, part); self.last_parts += 1
             return "sent"
         except errors.PeerFloodError:
             raise self.Limited("Telegram ограничил сообщения незнакомым (PEER_FLOOD)")
@@ -122,7 +128,7 @@ class TgCloud(BotLink):
         if not ent: return f"skip:{why}", None
         if self.c.get_messages(ent, limit=1):
             return "skip:переписка уже была", str(ent.id)
-        return self._send(ent, text), str(ent.id)
+        return self._send(ent, text, split=True), str(ent.id)
 
     def send_reply(self, username, peer_id, text, auto=False, known_out=None):
         ent, why = self._user(username)
@@ -131,15 +137,15 @@ class TgCloud(BotLink):
             msgs = self.c.get_messages(ent, limit=30)
             if msgs and msgs[0].out: return "skip:ответил сам"
             if known_out is not None and sum(1 for m in msgs if m.out) > known_out: return "skip:ответил сам"
-        return self._send(ent, text)
+        return self._send(ent, text, split=auto)
 
-    def send_followup(self, username, peer_id, text):
+    def send_followup(self, username, peer_id, text, known_out=1):
         ent, why = self._user(username)
         if not ent: return f"skip:{why}"
         msgs = self.c.get_messages(ent, limit=10)
         if any(not m.out for m in msgs): return "replied"
-        if sum(1 for m in msgs if m.out) != 1: return "skip:в чате не одно наше сообщение"
-        return self._send(ent, text)
+        if sum(1 for m in msgs if m.out) != known_out: return "skip:в чате не одно наше сообщение"
+        return self._send(ent, text, split=True)
 
     def scan_replies(self, peers):
         found = {}
