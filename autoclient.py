@@ -357,7 +357,8 @@ def parse_channel(name):
             try: when = datetime.datetime.fromisoformat(dt.group(1).replace("Z", "+00:00"))
             except Exception: pass
         v = re.search(r'tgme_widget_message_views">([^<]+)<', b)
-        posts.append({"id": pid.group(1) if pid else "", "text": clean(raw), "when": when,
+        btns = [(html.unescape(u), clean(t)) for u, t in re.findall(r'tgme_widget_message_inline_button[^>]*href="([^"]+)"[^>]*>(.*?)</a>', b, re.S)]
+        posts.append({"id": pid.group(1) if pid else "", "text": clean(raw), "when": when, "buttons": btns,
                       "links": re.findall(r'href="(?:https?:)?//t\.me/([A-Za-z][A-Za-z0-9_]{4,31})/?(?:\?[^"]*)?"', raw),
                       "views": parse_count(v.group(1)) if v else 0,
                       "video": ("message_video_player" in b) or ("roundvideo" in b)})
@@ -1233,7 +1234,7 @@ def main():
                         if not post["when"] or (datetime.datetime.now(datetime.timezone.utc) - post["when"]).total_seconds() > HOT_MAX_AGE_H * 3600:
                             continue
                         if not is_hot(post["text"]): continue
-                        why = guard.no_dm(post["text"])
+                        why = guard.no_dm(post["text"]) or guard.apply_by_button(post["text"], post.get("buttons"))
                         if why: log(f"пропуск вакансии {post['id']}: {why}"); continue
                         allc = hot_contacts(post, chn)
                         cands = [u for u in allc if u.lower() not in contacted and u.lower() not in bad and mine(u)
@@ -1269,9 +1270,8 @@ def main():
                         log(f"ВАКАНСИЯ: @{u} ({dn}) ← {link}")
                 save()
                 log(f"вакансии проверены ({len(hot_list())} каналов): +{new} в очередь (всего {len(st['hot_q'])})")
-                if manual:
-                    notify(f"🟡 Заказы без контакта в Telegram ({len(manual)}): там отклик через кнопку/форму/сайт, "
-                           f"автоматически не ответить. Если будет минута:\n\n" + "\n".join(manual[:15]))
+                if manual:      # вакансии без контакта в Telegram не присылаем ни Егору, ни кому-то ещё: просто пропускаем
+                    log(f"вакансий без контакта в Telegram пропущено: {len(manual)}")
 
             # ---- 1б. поиск НОВЫХ каналов с вакансиями (раз в 2 часа, один запрос)
             if web and now >= next_hot_disc:
