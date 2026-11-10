@@ -87,6 +87,13 @@ jobs:
           WEB_STATE_7: ${{ secrets.WEB_STATE_7 }}
         run: python cloud_run.py
 
+      - name: Stats (только цифры воронки, без имён)
+        if: always() && steps.gate.outputs.go == 'true'
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python crm.py stats state.json | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Save state
         if: always() && steps.gate.outputs.go == 'true'
         uses: actions/cache/save@v4
