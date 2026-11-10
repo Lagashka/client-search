@@ -300,6 +300,9 @@ NEG_REPLY = re.compile(r"не актуальн|неактуальн|не нуж�
                        r"уже есть монтаж|нет,? спасибо|спасибо,? (но )?нет|спасибо,? не|отказ|вакансия закрыта|"
                        r"набор закрыт|не пишите|не беспокойте|спам", re.I)
 
+def link0(u):
+    return [[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]]
+
 def reply_buttons(u):
     return [[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}],
             [{"text": "💰 Прайс", "callback_data": f"qr:price:{u}"}, {"text": "🎬 Примеры", "callback_data": f"qr:works:{u}"}],
@@ -1141,6 +1144,7 @@ def main():
                 if r == "sent":
                     if u in st["sent"]:
                         e.setdefault("my", []).append({"t": datetime.datetime.now().isoformat(timespec="minutes"), "what": label})
+                        crm.note_offer(e, cmd.get("text", ""))      # быстрый ответ с ценой тоже запускает касания 3-го и 7-го дня
                     log(f"ОТВЕТ клиенту @{u}: {label}")
                     notify(f"✅ {label} → {e.get('display') or u} (@{u}) отправлено", silent=True)
                 else:
@@ -1351,6 +1355,11 @@ def main():
                         e.setdefault("thread", []).append({"who": "them", "text": snippet})
                         kind = "вакансия" if e["kind"] == "hot" else f"холодное, вариант {e.get('variant')}"
                         verdict = crm.classify(snippet)
+                        if verdict != crm.ST_REFUSED and crm.is_junk(snippet):          # не лид: без денег / «читайте бота» / дубль
+                            e["junk"] = True; e["handoff"] = True; e.pop("pending", None)
+                            crm.mark(e, crm.ST_REPLIED, snippet)
+                            notify(f"🗑 Не лид (без оплаты или дубль): {e.get('display', '')} (@{u})\n«{snippet[:200]}»", buttons=link0(u), silent=True)
+                            continue
                         crm.mark(e, verdict, snippet)
                         e["outcome"] = "no" if verdict == crm.ST_REFUSED else "hot"
                         link = [[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]]
