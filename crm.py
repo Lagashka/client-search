@@ -9,7 +9,16 @@ LABEL = {ST_SENT: "📤 отправлено", ST_SILENT: "😶 молчит >48
          ST_AGREED: "✅ согласился", ST_REFUSED: "❌ отказ"}
 
 AGREE = re.compile(r"(?<!не )давайте|договорил|по рукам|(?<!не )согласн|(?<!не )согласен|готов(ы)? начать|присылайте|скидываю|пришлю|высылайте|"
-                   r"когда начн|оплат|реквизит|счёт|счет на|созвон|созвонимся|удобно в|давай тест|попробуем|начинаем|берём|берем", re.I)
+                   r"когда начн|оплат(ил[аи]?|им|ю|ой)\b|оплачу|реквизит|счёт|счет на|созвон|созвонимся|удобно в|давай тест|попробуем|начинаем|берём|берем", re.I)
+
+# ответы, которые лидом не являются: работа без денег, «читайте вакансию в боте», «вы нам уже писали»
+JUNK = re.compile(r"revenue.?share|рев.?шер|без фикс|за процент|процент от (прибыл|выруч|доход)|на энтузиазм|безвозмезд|"
+                  r"некоммерческ|без оплаты|бесплатно для портфолио|"
+                  r"@\w*bot\b|подробнее по вакансии|ознакомьтесь с вакансией|переходите в бот|"
+                  r"(вы|ты) (нам|мне) уже писал|уже (получили|получала|получал) (ваш|твой) отклик|вы уже писали|вы нам писали", re.I)
+
+def is_junk(text):
+    return bool(JUNK.search(text or ""))
 INTEREST = re.compile(r"сколько|цена|прайс|стоим|портфолио|примеры|пример|расскаж|подробн|интересно|какие сроки|сроки|"
                       r"объ[её]м|ттз|бриф|ссылк|покажите|можете|перевож|передам|менеджер|уточню|отпишусь|свяж|"
                       r"sending|send|price|portfolio|how much|interested|\?", re.I)
@@ -137,3 +146,23 @@ def push_board(st, token, chat_id, buttons=None):
         st["board_text"] = txt
     except Exception as ex:
         if "not found" in str(ex).lower() or "400" in str(ex): st["board_id"] = 0   # сообщение удалили — создадим заново
+
+
+def stats_summary(st):
+    """Только агрегаты, без имён и ников: безопасно печатать в публичный лог и сводку Actions."""
+    now = time.time(); f = funnel(st); c = f["c"]; days = {}
+    for e in st["sent"].values():
+        d = e.get("date", "")
+        if d: days[d] = days.get(d, 0) + 1
+    ents = list(st["sent"].values())
+    junk = sum(1 for e in ents if e.get("junk"))
+    return {"updated": datetime.datetime.now().isoformat(timespec="minutes"), "total": f["total"], "answered": f["answered"],
+            "reply_rate": f["reply_rate"], "interest": c[ST_INTEREST], "agreed": c[ST_AGREED], "refused": c[ST_REFUSED],
+            "silent": c[ST_SILENT], "waiting": c[ST_SENT], "junk": junk,
+            "price_named": sum(1 for e in ents if e.get("price_ts")), "closing_q": sum(1 for e in ents if e.get("close_q")),
+            "t3": sum(1 for e in ents if e.get("t3") and e.get("t3") != "skip"), "t7": sum(1 for e in ents if e.get("t7")),
+            "per_day": dict(sorted(days.items())[-10:])}
+
+if __name__ == "__main__" and len(__import__("sys").argv) > 2 and __import__("sys").argv[1] == "stats":
+    _st = json.load(open(__import__("sys").argv[2], encoding="utf-8")); _st.setdefault("sent", {})
+    print("STATS " + json.dumps(stats_summary(_st), ensure_ascii=False))
