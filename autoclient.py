@@ -1122,9 +1122,15 @@ def main():
             st["day"] = {"date": today(), "hot": 0, "cold": 0, "fu": 0}
         return st["day"]
 
+    tick_last = [0.0]
+
     def process_inbox():
         """Команды из бота: быстрые ответы клиентам и проверка аккаунта. Выполняются вне очереди и лимитов."""
         if not web: return
+        if CLOUD and hasattr(web, "tick_bot") and time.time() - tick_last[0] > 5:     # кнопки не ждут конца обхода каналов
+            tick_last[0] = time.time()
+            try: web.tick_bot()
+            except Exception: pass
         try: files = sorted(f for f in os.listdir(INBOX) if f.endswith(".json"))
         except FileNotFoundError: return
         for fn in files:
