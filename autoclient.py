@@ -1349,6 +1349,11 @@ def main():
                     for pid, snippet in got.items():
                         u = peers[pid]; e = st["sent"][u]
                         if snippet and snippet == e.get("last_in"): continue      # это сообщение уже обработано
+                        if crm.is_autoack(snippet):                                # шаблонный автоответ («ознакомимся, вернёмся»): не лид, молчим, ждём живого ответа
+                            e["last_in"] = snippet; e["last_in_ts"] = time.time(); e["auto_ack"] = True
+                            e.setdefault("thread", []).append({"who": "them", "text": snippet, "auto": True})
+                            log(f"автоответ HR от @{u}: не считаю ответом, не отвечаю — «{snippet[:60]}»")
+                            continue
                         first = not e.get("replied")
                         if first: e["replied"] = datetime.datetime.now().isoformat(timespec="minutes")
                         e["last_in"] = snippet; e["last_in_ts"] = time.time()
