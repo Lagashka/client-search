@@ -92,6 +92,8 @@ def check_before_send(kind, item):
         bio = _clean((re.search(r'tgme_page_description[^>]*>(.*?)</div>', page, re.S) or [None, ""])[1])
         why = no_dm(bio)
         if why: return "в био " + why
+        extra = _clean((re.search(r'tgme_page_extra[^>]*>(.*?)</div>', page, re.S) or [None, ""])[1]).lower()
+        if re.search(r"subscriber|подписчик|member|участник", extra): return "это канал или группа, а не человек"
     post = item.get("post") or ""
     m = re.match(r"https://t\.me/([A-Za-z0-9_]+)/(\d+)", post)
     if kind == "hot" and m:
