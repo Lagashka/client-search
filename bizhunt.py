@@ -300,12 +300,14 @@ def handles_in(text):
         hs = re.findall(r"@([A-Za-z][A-Za-z0-9_]{4,31})", text or "")
     return list(dict.fromkeys(hs + TME.findall(text or "")))
 
+VAC_TEXT = {}
 def hh_vacancy_contacts(url):
     """Текст вакансии hh: Telegram-контакт работодателя («пишите в тг @...») и запрет писать в личку, если он есть."""
     h = fetch(url, timeout=25)
     if not h: return [], ""
     i = h.find('data-qa="vacancy-description"')
     text = clean(h[i:i + 20000]) if i >= 0 else ""
+    VAC_TEXT[url] = text[:1500]                    # для нейросети: боль компании до первого письма (autoclient → analyst.lead_pain)
     try:
         import guard
         stop = guard.no_dm(text)
@@ -637,7 +639,19 @@ def tg_item(c):
     return {"username": c["tg"][0], "invited": invited, "found": time.time(), "post": c.get("vacancy_url", ""), "display": (TG_INFO.get(c["tg"][0].lower()) or {}).get("title") or c.get("name", ""),
             "variant": "BIZ", "niche": c.get("niche") or "бизнес", "uniq": 1,
             "source": c.get("vacancy_url") or c.get("site") or c.get("gis_url") or "",
+            "ctx": ctx_of(c),
             "text": re.sub(r"\s*\n\s*", "\n\n", c["tg_text"].strip())}   # абзац = отдельное сообщение (autoclient.split_parts)
+
+def ctx_of(c):
+    """Всё, что известно о компании, — для нейросети, которая ищет боль до диалога."""
+    ch = (c.get("socials") or {}).get("telegram", "").rsplit("/", 1)[-1].lower()
+    parts = [f"Компания: {c.get('name', '')}, город: {c.get('city', '')}, ниша: {c.get('niche', '')}",
+             f"Вакансия на hh: {c.get('vacancy', '')}" if c.get("vacancy") else "",
+             "Текст вакансии: " + VAC_TEXT.get(c.get("vacancy_url", ""), "") if VAC_TEXT.get(c.get("vacancy_url", "")) else "",
+             f"Рейтинг 2ГИС: {c.get('rating')}, отзывов {c.get('reviews')}" if c.get("rating") else "",
+             "Описание Telegram-канала: " + (TG_INFO.get(ch) or {}).get("desc", "") if ch and TG_INFO.get(ch) else "",
+             "Соцсети: " + ", ".join(sorted((c.get("socials") or {}).keys())) if c.get("socials") else "Соцсетей на сайте не нашёл"]
+    return "\n".join(p for p in parts if p)[:2000]
 
 def push_tg(c):
     q = jload(TG_QUEUE, [])
