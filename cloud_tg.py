@@ -31,11 +31,12 @@ class BotLink:
         self.bc = load_bot_control()
         self.ctl = CloudCtl(self.bc)
         self._warned409 = False
-        if not self.ctl.cfg.get("bots_v1"):                    # один раз: показать новую кнопку «Боты 1·2·3»
-            self.ctl.cfg["bots_v1"] = True; self.ctl.save()
+        if not self.ctl.cfg.get("bots_v2"):                    # один раз: показать новые кнопки «Боты 1·2·3» и «Разбор»
+            self.ctl.cfg["bots_v2"] = True; self.ctl.save()
             try:
-                self.bc.say("🆕 В пульте появилась кнопка " + self.bc.B_BOTS + ": там включаются и выключаются боты "
-                            "1 (вакансии), 2 (компании) и 3 (партнёры).")
+                self.bc.say("🆕 Новое в пульте:\n" + self.bc.B_BOTS + " — включить/выключить боты 1 (вакансии), 2 (компании), 3 (партнёры)\n"
+                            + self.bc.B_ANALYZE + " — нейросеть разбирает цифры всех ботов и предлагает решения, каждый вечер сама\n"
+                            "🔥 На каждый ответ клиента — подсказка, что он хочет, и готовый ответ кнопкой «📨 Отправить этот ответ»")
                 self.bc.say(*self.bc.render_bots())
             except Exception: pass
 
