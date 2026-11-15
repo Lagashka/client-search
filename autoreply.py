@@ -477,7 +477,7 @@ def cold_message(ch, display, niche, variant):
     j, _ = _llm(COLD, [{"role": "user", "content": dossier}])
     if not j: return None
     txt = str(j.get("text", "")).strip()
-    if len(txt) < 200 or len(txt) > 1500 or "zakulisy715" not in txt or not _sane(txt, first=True, discount_ok=(str(variant) == "C")) or not _COMPLEX.search(txt): return None
+    if len(txt) < 200 or len(txt) > 1500 or not _sane(txt, first=True, discount_ok=(str(variant) == "C")) or not _COMPLEX.search(txt): return None   # ссылку autoclient вырезает: незнакомым без ссылок
     if re.search(r"просмотр\w*\s*[—:-]?\s*0(?!\d)|\b0 подписчик|я снимаю|досье|здравствуйте,? (эксперт|команда|ипотечный|ан\b)|\d+.секундн", txt, re.I): return None   # выдумки/канцелярит
     if not re.search(r"Я Егор|Меня зовут Егор|Егор, монтаж", txt): return None                    # представиться обязательно
     return txt
