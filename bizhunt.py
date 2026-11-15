@@ -725,7 +725,7 @@ def collect(cfg, st):
                 if len(items) < 20: break
         st["hh_last"] = now
         log(f"hh.ru: найдено вакансий {len(new)}")
-    if cfg.get("gis_key"):
+    if cfg.get("gis_key") and now > st.get("gis_off_until", 0):
         pairs = [(q, ct) for ct in cfg["cities"] for q in cfg["gis_queries"]]
         i = st.get("gis_i", 0) % len(pairs)
         q, ct = pairs[i]
@@ -733,8 +733,15 @@ def collect(cfg, st):
         items, err = gis_search(q, ct, cfg["gis_key"], st, page, cfg["limits"]["min_reviews_2gis"])
         if err:
             log(f"2ГИС «{q}» {ct}: {err}")
-            if "403" in err or "401" in err or "ключ" in err.lower(): notify(f"⚠️ 2ГИС не принимает ключ: {err}")
+            if "403" in err or "401" in err or "ключ" in err.lower() or "лимит" in err.lower():
+                st["gis_fail"] = st.get("gis_fail", 0) + 1
+                if st["gis_fail"] >= 3:                          # ключ отклонён/лимит кончился: пауза 12 ч и одно уведомление в сутки
+                    st["gis_off_until"] = now + 12 * 3600; st["gis_fail"] = 0
+                    if st.get("gis_notified") != today():
+                        st["gis_notified"] = today()
+                        notify(f"⚠️ 2ГИС не принимает ключ или кончился лимит ({err[:80]}). Ставлю 2ГИС на паузу 12 ч, hh.ru и остальные боты работают.")
         else:
+            st["gis_fail"] = 0
             log(f"2ГИС «{q}» {ct} стр.{page}: подходящих {len(items)}")
         new += items
         if items and page < 5: st["gis_page"][f"{q}|{ct}"] = page + 1
