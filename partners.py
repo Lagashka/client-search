@@ -156,6 +156,8 @@ def template(c):
 def item_of(c):
     return {"username": c["username"], "invited": False, "found": time.time(), "post": "", "display": c.get("who") or c.get("title") or "",
             "variant": "PARTNER", "niche": "партнёр-" + (c["role"] or "smm"), "uniq": 1, "source": c["source"],
+            "ctx": (f"Кто: {c['role']} ({'резюме на доске вакансий' if c['src'] == 'resume' else 'свой Telegram-канал'})\n"
+                    f"Канал/доска: {c.get('title') or c.get('board_title') or ''}\nТекст: {c.get('snippet', '')}")[:2000],
             "text": re.sub(r"\s*\n\s*", "\n\n", c["text"].strip())}
 
 # ---------------------------------------------------------------- поиск
