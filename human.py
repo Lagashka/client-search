@@ -45,7 +45,7 @@ def looks_bot(t, allow_link=False):
     return ""
 
 def humanize(t, allow_link=False):
-    t = (t or "").strip()
+    t = (t or "").strip().replace("‑", "-").replace("‐", "-").replace(" ", " ").replace(" ", " ")
     t = re.sub(r"\s+[—–]\s+", ", ", t).replace("—", ", ").replace("–", "-")
     t = t.replace("!", ".")
     t = re.sub(r"(?i)\bприветствую\b", "Здравствуйте", t)
