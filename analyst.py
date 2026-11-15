@@ -153,7 +153,11 @@ def report(st, log_text="", settings=None, days=7, use_llm=True):
         text += "\n\n(нейросеть сейчас недоступна, разбор только по правилам)"
     seen, uniq = set(), []
     cur = m["settings"]
+    restricted = bool(m["log"]["ограничения Telegram"] or m["limited_until"])
     for a in actions:
+        if restricted and any(x in ("limit_hot", "limit_cold") and v > (cur.get(x) or 0) or x == "gap" and v < (cur.get(x) or 0)
+                              for x, v in a["set"].items()):
+            continue                                  # после ограничений Telegram объём не поднимаем, кто бы ни советовал
         k = json.dumps(a["set"], sort_keys=True)
         if all(cur.get(x) == v for x, v in a["set"].items()): continue        # и так уже стоит — не предлагаем
         if k not in seen: seen.add(k); uniq.append(a)
@@ -179,18 +183,35 @@ WHO = {"hot": "человек, который ищет монтажёра (ва�
        "PARTNER": "SMM-специалист / таргетолог / агентство — потенциальный партнёр (продаёт ролики Егора своим клиентам с наценкой 20%)",
        "cold": "эксперт со своим Telegram-каналом"}
 
+_FAILS = {"n": 0, "until": 0}      # нейросеть лежит → 30 минут не дёргаем её, чтобы не тормозить отправку
+
+def _llm_guarded(system, msgs, n):
+    import autoreply
+    if time.time() < _FAILS["until"]: return None
+    t0 = time.time()
+    j, prov = autoreply._llm(system, msgs, n)
+    if not j or time.time() - t0 > 120:
+        _FAILS["n"] += 1
+        if _FAILS["n"] >= 3: _FAILS.update(n=0, until=time.time() + 1800)
+    else:
+        _FAILS["n"] = 0
+    return j
+
 def lead_pain(item, kind):
     """→ {"pain", "solution", "line"} или None. Нейросеть читает контекст человека до первого письма."""
     try:
         import autoreply, human
         if not autoreply.llm_on() or not item.get("ctx"): return None
         who = WHO.get(item.get("variant") if item.get("variant") in ("BIZ", "PARTNER") else kind, WHO["cold"])
-        j, _ = autoreply._llm(PAIN, [{"role": "user", "content": f"Кто: {who}\nИмя: {item.get('display', '')}\n\n{item['ctx'][:2000]}"}], 500)
+        j = _llm_guarded(PAIN, [{"role": "user", "content": f"Кто: {who}\nИмя: {item.get('display', '')}\n\n{item['ctx'][:2000]}"}], 500)
         if not j or j.get("skip") or not j.get("line") or not j.get("pain"): return None
         line = human.humanize(autoreply.voicefy(str(j["line"]).strip()))
         line = line[:1].upper() + line[1:]
         nums_ok = all(n in item["ctx"] for n in re.findall(r"\d{2,}", line))          # цифры — только из данных
         if re.search(r"\bЕгор\w*|сервис|мы (делаем|берём|предлагаем)|наша", line, re.I): return None     # только от первого лица
+        if len(re.findall(r"[А-Яа-яЁё]", line)) < 3 * len(re.findall(r"[A-Za-z]", line)): return None     # не на русском
+        if item.get("display") and re.search(r"\b(здравствуйте|добрый день|привет)", line, re.I): return None   # второе приветствие
+        if re.search(r"съём|сниму|сниму|ведени\w* соц|настро\w* реклам|запущу", line, re.I): return None   # обещает то, чего Егор не делает
         if not (80 <= len(line) <= 300) or not nums_ok or "₽" in line or human.looks_bot(line) or not autoreply._sane(line, item["ctx"], first=True):
             return None
         return {"pain": str(j["pain"])[:300], "solution": str(j.get("solution", ""))[:300], "line": line}
@@ -223,7 +244,7 @@ def reply_advice(e, their_text):
         pain_txt = f"Боль, найденная до диалога: {pn.get('pain')}; решение: {pn.get('solution')}\n" if pn else ""
         msg = (f"Кто: {who}\nИмя: {e.get('display', '')}\n{pain_txt}\n"
                f"Первое письмо Егора:\n{(e.get('text') or '')[:900]}\n\nОтвет человека:\n{their_text[:600]}")
-        j, _ = autoreply._llm(ADVISE, [{"role": "user", "content": msg}], 500)
+        j = _llm_guarded(ADVISE, [{"role": "user", "content": msg}], 500)
         if not j or not j.get("reply"): return None
         r = human.humanize(autoreply.voicefy(str(j["reply"]).strip()))
         r = r[:1].upper() + r[1:]
