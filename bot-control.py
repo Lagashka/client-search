@@ -442,6 +442,14 @@ def handle_callback(ctl, cq):
         u = data.split(":", 1)[1]
         e = (jload(STATE, {}).get("sent") or {}).get(u) or {}
         if not e.get("advice"): answer(cq, "Совет не найден, ответь сам"); return
+        key = f"{u}:{int(e.get('advice_ts', 0))}"
+        done = ctl.cfg.setdefault("adv_done", [])
+        if key in done: answer(cq, "Этот ответ уже отправлен"); return              # двойное нажатие = два одинаковых сообщения
+        if time.time() - e.get("advice_ts", time.time()) > 3 * 3600:
+            answer(cq, "Совет устарел (больше 3 ч), диалог мог уйти дальше — ответь сам"); return
+        if (e.get("last_in_ts") or 0) > (e.get("advice_ts") or 0) + 5:
+            answer(cq, "Клиент уже написал ещё — совет не про то, ответь сам"); return
+        done.append(key); ctl.cfg["adv_done"] = done[-300:]; ctl.save()
         to_inbox({"cmd": "send", "to": u, "text": e["advice"], "label": "🧠 Ответ по совету"})
         answer(cq, "Отправляю…" if ctl.running() else "Поиск выключен — уйдёт после ▶️ Запустить")
     elif data.startswith("bot:"):
