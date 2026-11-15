@@ -40,6 +40,7 @@ B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 О
 B_SETTINGS, B_LOG, B_RESTART = "⚙️ Настройки", "📝 Лог", "♻️ Перезапуск"
 B_BASE = "🗂 База лидов"
 B_BOTS = "🤖 Боты 1·2·3"
+B_ANALYZE = "🧠 Разбор"
 BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на вакансии в Telegram-каналах"),
         ("biz_on", "2️⃣ Компании", "бизнесы с hh.ru и 2ГИС → личное сообщение"),
         ("partners_on", "3️⃣ Партнёры", "SMM-специалисты, таргетологи, агентства → партнёрство"),
@@ -47,7 +48,7 @@ BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на ваканс
         ("fu_on", "🔁 Дожимы", "одно напоминание тем, кто молчит")]
 KEYBOARD = {"keyboard": [[{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
                          [{"text": B_BASE}, {"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
-                         [{"text": B_SETTINGS}, {"text": B_LOG}, {"text": B_RESTART}]],
+                         [{"text": B_ANALYZE}, {"text": B_SETTINGS}, {"text": B_LOG}, {"text": B_RESTART}]],
             "resize_keyboard": True, "is_persistent": True}
 
 # Быстрые ответы клиенту — по прайсу 2.0 и «скрипту как ответить 2.0» Егора
@@ -325,8 +326,24 @@ def render_bots():
     kb.append([{"text": "✅ Включить все", "callback_data": "bot:all_on"}, {"text": "⏸ Выключить все", "callback_data": "bot:all_off"}])
     return text, {"inline_keyboard": kb}
 
+def run_analysis(ctl, days=7, intro=""):
+    """🧠 Разбор: цифры по ботам + нейросеть ищет узкие места и предлагает решения; действия — кнопками."""
+    try:
+        sys.path.insert(0, BASE)
+        import analyst
+        try: logt = open(LOGF, encoding="utf-8").read()[-400000:]
+        except Exception: logt = ""
+        text, acts = analyst.report(jload(STATE, {}), logt, settings(), days)
+    except Exception as e:
+        clog("разбор:", e); say("Разбор не получился: " + str(e)[:150]); return
+    ctl.cfg["an_actions"] = acts; ctl.save()
+    kb = [[{"text": "✅ " + a["label"], "callback_data": f"an:{i}"}] for i, a in enumerate(acts)]
+    kb.append([{"text": "🔄 Разобрать заново", "callback_data": "an:again"}])
+    say(intro + text, markup={"inline_keyboard": kb})
+
 HELP = ("Пульт поиска клиентов 🎬\n\n"
         f"{B_BOTS} — включить/выключить бота 1 (вакансии), 2 (компании), 3 (партнёры)\n"
+        f"{B_ANALYZE} — нейросеть разбирает цифры всех ботов и предлагает, что поменять (применяется кнопкой)\n"
         f"{B_START} / {B_STOP} — включить / выключить поиск\n"
         f"{B_STATUS} — что происходит прямо сейчас и итоги дня\n"
         f"{B_REPLIES} — кто ответил, со ссылками на чаты\n"
@@ -344,7 +361,7 @@ def handle_text(ctl, text):
     if low in ("/cancel", "отмена"):
         ctl.cfg.pop("pending", None); ctl.save(); say("Ок, отменил."); return
     buttons = {B_START.lower(), B_STOP.lower(), B_STATUS.lower(), B_REPLIES.lower(), B_SENT.lower(), B_BASE.lower(),
-               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower()}
+               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower(), B_ANALYZE.lower()}
     if pend and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
         to_inbox({"cmd": "send", "to": pend["to"], "text": t, "label": "✍️ Твой ответ"})
         ctl.cfg.pop("pending", None); ctl.save()
@@ -377,6 +394,9 @@ def handle_text(ctl, text):
         say(*render_settings())
     elif low in (B_BOTS.lower(), "/bots", "боты"):
         say(*render_bots())
+    elif low in (B_ANALYZE.lower(), "/analyze", "разбор", "анализ"):
+        say("🧠 Разбираю цифры всех ботов, до минуты…", silent=True)
+        run_analysis(ctl)
     else:
         say("Не понял. Нажми кнопку внизу 👇")
 
@@ -394,6 +414,23 @@ def handle_callback(ctl, cq):
         key = data.split(":")[1]
         s = settings(); s[key] = not s[key]; jsave(SETTINGS, s)
         edit(mid, *render_settings()); answer(cq, "Сохранено")
+    elif data.startswith("an:"):
+        k = data.split(":")[1]
+        if k == "again":
+            answer(cq, "Разбираю заново…"); run_analysis(ctl); return
+        acts = ctl.cfg.get("an_actions") or []
+        if not k.isdigit() or int(k) >= len(acts): answer(cq, "Это предложение устарело, нажми 🧠 Разбор"); return
+        a = acts[int(k)]
+        s = settings(); s.update(a["set"]); jsave(SETTINGS, s)
+        answer(cq, "Применил: " + a["label"])
+        say("✅ Применил: " + a["label"] + "\n" + ", ".join(f"{x} = {v}" for x, v in a["set"].items()) +
+            "\nВернуть можно в 🤖 Боты и ⚙️ Настройки.", silent=True)
+    elif data.startswith("adv:"):
+        u = data.split(":", 1)[1]
+        e = (jload(STATE, {}).get("sent") or {}).get(u) or {}
+        if not e.get("advice"): answer(cq, "Совет не найден, ответь сам"); return
+        to_inbox({"cmd": "send", "to": u, "text": e["advice"], "label": "🧠 Ответ по совету"})
+        answer(cq, "Отправляю…" if ctl.running() else "Поиск выключен — уйдёт после ▶️ Запустить")
     elif data.startswith("bot:"):
         key = data.split(":")[1]
         s = settings()
@@ -462,6 +499,8 @@ def evening_report(ctl):
                    if (e.get('replied') or '')[:10] == today and e.get('outcome') != 'no')[:300]
                if hot else "Поиск продолжается и ночью: заказы собираются, отправка — по расписанию."))
     say(text, markup=refresh_kb("status"))
+    if settings().get("advice_on", True):
+        run_analysis(ctl, intro="Вечерний разбор\n\n")             # каждый вечер нейросеть сама ищет узкие места
 
 def process_update(ctl, u):
     """Одно обновление от Telegram: нажатие кнопки или сообщение. Общее для пульта на ПК и для облака."""
