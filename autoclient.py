@@ -196,8 +196,25 @@ def jsave(p, data):
     with open(tmp, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, p)
 
-DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True}
+DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True,
+            "biz_on": True, "partners_on": True}
 _SC = {"m": None, "v": dict(DEFAULTS)}
+
+def bot_key(item, kind):
+    """Какой из трёх ботов (кнопка пульта) отвечает за письмо: 1 вакансии (hot_on), 2 компании (biz_on), 3 партнёры (partners_on);
+    обычные холодные экспертам — cold_on."""
+    v = item.get("variant")
+    if v == "BIZ": return "biz_on"
+    if v == "PARTNER": return "partners_on"
+    return "hot_on" if kind == "hot" else "cold_on"
+
+def pick_allowed(q, kind, s):
+    """Первое письмо в очереди, чей бот включён, — переставить в начало (отправка берёт q[0])."""
+    for i, x in enumerate(q):
+        if s.get(bot_key(x, kind), True):
+            if i: q.insert(0, q.pop(i))
+            return q[0]
+    return None
 
 def S():
     """Настройки из settings.json (их меняет бот). Перечитываются, как только файл изменился."""
@@ -536,7 +553,7 @@ def followup_text(entry):
                                     "уточню, поиск ещё актуален? Если да, покажу тест на вашем материале")
         if entry.get("variant") == "PARTNER":
             return lead + ", " + sp("вернусь к своему сообщению про партнёрство) если видео у ваших клиентов сейчас не в задачах, напишите «нет», больше не побеспокою",
-                                    "коротко напомню про партнёрство по видео, 15% с оплат приведённого клиента. Если не актуально, просто ответьте «нет»",
+                                    "коротко напомню про партнёрство по видео: ролики под вашим брендом, ваша наценка 20%. Если не актуально, просто ответьте «нет»",
                                     "пишу ещё раз, последний) если появится клиент, которому нужны Reels или видеокреативы, подхвачу, тест сделаю бесплатно")
         return lead + ", " + sp("вернусь к своему сообщению, если тема не ваша, напишите «нет», больше не побеспокою) а если интересно, пришлю схему серии роликов под ваш канал",
                                 "не хочу быть навязчивым, поэтому коротко: если видео сейчас не в планах, просто ответьте «нет», а если в планах, покажу схему серии под вашу тему",
@@ -1205,7 +1222,9 @@ def main():
     def why_idle(s, d, limited):
         if limited: return f"⛔ пауза до {st['limited_until'][11:16]} (защита аккаунта)"
         parts = []
-        if not s["hot_on"]: parts.append("вакансии выключены")
+        off = [n for k, n in (("hot_on", "1 вакансии"), ("biz_on", "2 компании"), ("partners_on", "3 партнёры")) if not s.get(k, True)]
+        if off: parts.append("выключены боты: " + ", ".join(off))
+        if not s["hot_on"]: pass
         elif not in_hours(HOURS_HOT): parts.append(f"вакансии: ночь, продолжу в {HOURS_HOT[0]}:00 МСК")
         elif d["hot"] >= s["limit_hot"]: parts.append("вакансии: дневной лимит исчерпан")
         elif not st["hot_q"]: parts.append("вакансии: жду новые")
@@ -1286,7 +1305,7 @@ def main():
                     time.sleep(3); continue
 
             # ---- 1. горячие вакансии
-            if now >= next_hot:
+            if now >= next_hot and s["hot_on"]:             # бот 1 выключен кнопкой — каналы вакансий не читаем
                 next_hot = now + HOT_SCAN_EVERY
                 new, manual = 0, []
                 live(phase="проверяю каналы с вакансиями")
@@ -1522,9 +1541,10 @@ def main():
             gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
                 job = None
-                if s["hot_on"] and in_hours(HOURS_HOT) and d["hot"] < lim_hot:
+                if (s["hot_on"] or s.get("biz_on", True)) and in_hours(HOURS_HOT) and d["hot"] < lim_hot:
                     st["hot_q"] = [x for x in st["hot_q"] if now - x["found"] < 48 * 3600]
-                    if st["hot_q"]: job = ("hot", st["hot_q"][0])
+                    it = pick_allowed(st["hot_q"], "hot", s)
+                    if it: job = ("hot", it)
                 if not job and not warm and in_hours(HOURS_COLD) and d["cold"] + d["fu"] < s["limit_cold"]:
                     if s["fu_on"]:
                         for u, e in st["sent"].items():
@@ -1536,7 +1556,9 @@ def main():
                             for u, e in st["sent"].items():
                                 tm = touch_due(e, now)
                                 if tm: e["_tm"] = tm; job = ("fu", u); break
-                    if not job and s["cold_on"] and st["cold_q"]: job = ("cold", st["cold_q"][0])
+                    if not job and st["cold_q"]:
+                        it = pick_allowed(st["cold_q"], "cold", s)
+                        if it: job = ("cold", it)
                 if not job: live(phase="жду", why=why_idle(s, d, limited), next_send=0)
                 else: live(phase=f"пишу @{job[1] if job[0] == 'fu' else job[1]['username']}")
 
@@ -1627,7 +1649,7 @@ def main():
                 live(why="пауза между сообщениями", next_send=next_send)
 
             # ---- 3b. бизнесы из «Поиск бизнеса\bizhunt.py» (hh.ru + 2ГИС) — готовые письма в общую холодную очередь
-            if (s["cold_on"] or s["hot_on"]) and s.get("biz_on", True) and bizhunt and now - st.get("biz_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
+            if s.get("biz_on", True) and bizhunt and now - st.get("biz_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
                 st["biz_ts"] = now
                 live(phase="ищу бизнесы (hh.ru / 2ГИС)")
                 try:
@@ -1642,7 +1664,7 @@ def main():
                     log("поиск бизнеса не удался:", str(e)[:120])
                 save()
             # ---- 3c. бот 3 «партнёры»: SMM-специалисты, таргетологи, агентства → партнёрский оффер (15% / под их брендом)
-            if s["cold_on"] and s.get("partners_on", True) and partners and now - st.get("partners_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
+            if s.get("partners_on", True) and partners and now - st.get("partners_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
                 st["partners_ts"] = now
                 live(phase="ищу партнёров (SMM, таргетологи)")
                 try:
