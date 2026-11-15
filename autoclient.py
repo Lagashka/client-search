@@ -66,6 +66,11 @@ HOURS_COLD = (10, 20)   # часы по Москве для холодных
 HOT_SCAN_EVERY = 12 * 60
 REPLY_CHECK_EVERY = 60          # ответы проверяем каждую минуту: скорость ответа клиенту = деньги
 AUTO_DELAY = (1800, 1860)        # автоответ уходит только через 30 минут и только если Егор за это время сам не ответил
+HOLD_DELAY = (600, 900)          # режим hold_only: «скоро вернусь» через 10–15 мин, если Егор сам не ответил
+HOLD_TEXTS = ["Спасибо, сейчас чуть занят, вернусь к вам в течение часа",
+              "Благодарю, скоро вернусь к вам, подождите немного",
+              "Спасибо за ответ, я сейчас за монтажом, чуть позже напишу подробно",
+              "Окей, спасибо, вернусь к вам совсем скоро"]
 AUTO_HOURS = (8, 23)            # автоответы — днём по Москве; ночные сообщения получат ответ утром
 
 SPLIT_ON = True                  # письмо уходит несколькими сообщениями, как пишет сам Егор
@@ -284,6 +289,11 @@ def notify(text, buttons=None, silent=False):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import crm, autoreply, guard, zlib
+try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
+    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск бизнеса"))
+    import bizhunt
+except Exception as _e:
+    bizhunt = None
 
 # Команда из двух аккаунтов (Егор и Саша) делит контакты пополам, чтобы один человек не получил два письма.
 # CONTACTS_PART = "0" или "1" (у Егора в облаке "0", у Саши "1"); пусто — пишем всем.
@@ -1381,6 +1391,24 @@ def main():
                         link = [[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]]
                         with open(REPLIES, "a", encoding="utf-8") as f:
                             f.write(f"- {e['replied']} @{u} ({e.get('display', '')}) — {kind} — {crm.LABEL[verdict]} — «{snippet}» — https://t.me/{u}\n")
+                        if s.get("hold_only", True):
+                            # 15.11: диалоги ведёт Егор. Бот только пишет первое сообщение, а на ответ — максимум одно
+                            # «скоро вернусь» (если Егор сам не ответил за 10–15 мин). На вопросы бот не отвечает.
+                            e["handoff"] = True; e.pop("pending", None)
+                            if verdict == crm.ST_REFUSED:
+                                notify(f"❌ Отказ: {e.get('display', '')} (@{u})\n«{snippet}»", buttons=link, silent=True)
+                                continue
+                            hold_note = ""
+                            if first and not e.get("human") and not e.get("hold_sent") and in_hours(AUTO_HOURS):
+                                hd = random.uniform(*HOLD_DELAY)
+                                e["hold_sent"] = 1
+                                e["pending"] = {"text": random.choice(HOLD_TEXTS), "due": now + hd, "src": "hold", "bye": 1}
+                                hold_note = (f"\n\n⏳ Если не ответишь сам за {int(hd // 60)} мин, напишу «{e['pending']['text']}». "
+                                             f"Больше бот в этом чате ничего не пишет.")
+                            head = "✅ СОГЛАСИЛСЯ" if verdict == crm.ST_AGREED else "🔥 ОТВЕТИЛ"
+                            notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{hold_note}\n\n{kind}: {e.get('source', '')}",
+                                   buttons=reply_buttons(u))
+                            continue
                         autoon = s.get("autoreply", True)
                         delay = random.uniform(*AUTO_DELAY)               # отвечаем не мгновенно — как живой человек
                         if verdict == crm.ST_REFUSED:
@@ -1555,6 +1583,34 @@ def main():
                 live(phase="жду", why=why_idle(s, d, limited), next_send=0)
             elif time.time() < next_send:
                 live(why="пауза между сообщениями", next_send=next_send)
+
+            # ---- 3b. бизнесы из «Поиск бизнеса\bizhunt.py» (hh.ru + 2ГИС) — готовые письма в общую холодную очередь
+            if (s["cold_on"] or s["hot_on"]) and s.get("biz_on", True) and bizhunt and now - st.get("biz_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
+                st["biz_ts"] = now
+                live(phase="ищу бизнесы (hh.ru / 2ГИС)")
+                try:
+                    skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u)
+                    for item in bizhunt.tg_step(st.setdefault("biz", {}), skip=skip, max_prepare=3):
+                        # контакт из текста вакансии («пишите в тг») = отклик на вакансию: лимит вакансий (40), а не холодных
+                        (st["hot_q"] if item.get("invited") else st["cold_q"]).insert(0, item)
+                        contacted.add(item["username"].lower())
+                        log(f"бизнес в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
+                except Exception as e:
+                    log("поиск бизнеса не удался:", str(e)[:120])
+                save()
+            biz_file = os.path.join(BASE, "biz_tg.json")
+            if s["cold_on"] and os.path.exists(biz_file):
+                try:
+                    biz = jload(biz_file, [])
+                    os.remove(biz_file)
+                    for item in biz:
+                        ul = item.get("username", "").lower()
+                        if not ul or ul in contacted or ul in bad or not mine(ul): continue
+                        st["cold_q"].insert(0, item); contacted.add(ul)
+                        log(f"бизнес в очередь Telegram: @{item['username']} ({item.get('display', '')})")
+                    save()
+                except Exception as e:
+                    log("biz_tg.json не прочитан:", str(e)[:80])
 
             # ---- 4. поиск холодных — в паузах между отправками
             if s["cold_on"] and len(st["cold_q"]) < 30:
