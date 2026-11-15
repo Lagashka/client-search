@@ -1590,7 +1590,8 @@ def main():
                 live(phase="ищу бизнесы (hh.ru / 2ГИС)")
                 try:
                     skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u)
-                    for item in bizhunt.tg_step(st.setdefault("biz", {}), skip=skip, max_prepare=3):
+                    tgs = getattr(web, "search_channels", None) if web else None   # поиск каналов компаний из 2ГИС
+                    for item in bizhunt.tg_step(st.setdefault("biz", {}), skip=skip, max_prepare=3, tg_search=tgs):
                         # контакт из текста вакансии («пишите в тг») = отклик на вакансию: лимит вакансий (40), а не холодных
                         (st["hot_q"] if item.get("invited") else st["cold_q"]).insert(0, item)
                         contacted.add(item["username"].lower())
