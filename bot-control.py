@@ -41,12 +41,14 @@ B_SETTINGS, B_LOG, B_RESTART = "⚙️ Настройки", "📝 Лог", "♻�
 B_BASE = "🗂 База лидов"
 B_BOTS = "🤖 Боты 1·2·3"
 B_ANALYZE = "🧠 Разбор"
+B_ALL = "🚀 Запустить все боты"
 BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на вакансии в Telegram-каналах"),
         ("biz_on", "2️⃣ Компании", "бизнесы с hh.ru и 2ГИС → личное сообщение"),
         ("partners_on", "3️⃣ Партнёры", "SMM-специалисты, таргетологи, агентства → партнёрство"),
         ("cold_on", "❄️ Эксперты", "холодные письма экспертам с каналами"),
         ("fu_on", "🔁 Дожимы", "одно напоминание тем, кто молчит")]
-KEYBOARD = {"keyboard": [[{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
+KEYBOARD = {"keyboard": [[{"text": B_ALL}],
+                         [{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
                          [{"text": B_BASE}, {"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
                          [{"text": B_ANALYZE}, {"text": B_SETTINGS}, {"text": B_LOG}, {"text": B_RESTART}]],
             "resize_keyboard": True, "is_persistent": True}
@@ -342,6 +344,7 @@ def run_analysis(ctl, days=7, intro=""):
     say(intro + text, markup={"inline_keyboard": kb})
 
 HELP = ("Пульт поиска клиентов 🎬\n\n"
+        f"{B_ALL} — одной кнопкой включить все боты и нейросеть и запустить поиск\n"
         f"{B_BOTS} — включить/выключить бота 1 (вакансии), 2 (компании), 3 (партнёры)\n"
         f"{B_ANALYZE} — нейросеть разбирает цифры всех ботов и предлагает, что поменять (применяется кнопкой)\n"
         f"{B_START} / {B_STOP} — включить / выключить поиск\n"
@@ -361,7 +364,7 @@ def handle_text(ctl, text):
     if low in ("/cancel", "отмена"):
         ctl.cfg.pop("pending", None); ctl.save(); say("Ок, отменил."); return
     buttons = {B_START.lower(), B_STOP.lower(), B_STATUS.lower(), B_REPLIES.lower(), B_SENT.lower(), B_BASE.lower(),
-               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower(), B_ANALYZE.lower()}
+               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower(), B_ANALYZE.lower(), B_ALL.lower()}
     if pend and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
         to_inbox({"cmd": "send", "to": pend["to"], "text": t, "label": "✍️ Твой ответ"})
         ctl.cfg.pop("pending", None); ctl.save()
@@ -393,6 +396,16 @@ def handle_text(ctl, text):
     elif low in (B_SETTINGS.lower(), "/settings", "настройки"):
         say(*render_settings())
     elif low in (B_BOTS.lower(), "/bots", "боты"):
+        say(*render_bots())
+    elif low in (B_ALL.lower(), "/all", "запустить все", "все боты"):
+        s = settings()
+        for k, _, _ in BOTS: s[k] = True                 # 1 вакансии, 2 компании, 3 партнёры, эксперты, дожимы
+        s["advice_on"] = True; s["pain_on"] = True       # нейросеть: боль до диалога и советы по ответам
+        jsave(SETTINGS, s)
+        ctl.cfg["want"] = True; ctl.crashes = []; ctl.save(); ctl.start()
+        say("🚀 Все боты запущены разом: 1 вакансии, 2 компании, 3 партнёры, эксперты, дожимы.\n"
+            "🧠 Нейросеть включена: ищет боль каждого клиента до письма и подсказывает ответы.\n"
+            "Через пару минут нажми 📊 Статус.")
         say(*render_bots())
     elif low in (B_ANALYZE.lower(), "/analyze", "разбор", "анализ"):
         say("🧠 Разбираю цифры всех ботов, до минуты…", silent=True)
