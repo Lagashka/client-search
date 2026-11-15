@@ -301,6 +301,11 @@ try:                                     # поиск бизнесов (hh.ru + 
     import bizhunt
 except Exception as _e:
     bizhunt = None
+try:                                     # бот 3: партнёры (SMM, таргетологи, агентства) — «Поиск партнёров\partners.py», в облаке рядом
+    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск партнёров"))
+    import partners
+except Exception as _e:
+    partners = None
 
 # Команда из двух аккаунтов (Егор и Саша) делит контакты пополам, чтобы один человек не получил два письма.
 # CONTACTS_PART = "0" или "1" (у Егора в облаке "0", у Саши "1"); пусто — пишем всем.
@@ -529,6 +534,10 @@ def followup_text(entry):
             return lead + ", " + sp("подскажите, вакансия ещё актуальна? Если да, сделаю тест к вечеру, окей?",
                                     "вакансия ещё открыта? Могу сегодня сделать тест на 10–15 секунд, а там решим вопрос",
                                     "уточню, поиск ещё актуален? Если да, покажу тест на вашем материале")
+        if entry.get("variant") == "PARTNER":
+            return lead + ", " + sp("вернусь к своему сообщению про партнёрство) если видео у ваших клиентов сейчас не в задачах, напишите «нет», больше не побеспокою",
+                                    "коротко напомню про партнёрство по видео, 15% с оплат приведённого клиента. Если не актуально, просто ответьте «нет»",
+                                    "пишу ещё раз, последний) если появится клиент, которому нужны Reels или видеокреативы, подхвачу, тест сделаю бесплатно")
         return lead + ", " + sp("вернусь к своему сообщению, если тема не ваша, напишите «нет», больше не побеспокою) а если интересно, пришлю схему серии роликов под ваш канал",
                                 "не хочу быть навязчивым, поэтому коротко: если видео сейчас не в планах, просто ответьте «нет», а если в планах, покажу схему серии под вашу тему",
                                 "пишу ещё раз, последний) предложение в силе, могу бесплатно показать, как ваш пост выглядел бы роликом, а если не актуально, так и напишите")
@@ -1631,6 +1640,20 @@ def main():
                         log(f"бизнес в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
                 except Exception as e:
                     log("поиск бизнеса не удался:", str(e)[:120])
+                save()
+            # ---- 3c. бот 3 «партнёры»: SMM-специалисты, таргетологи, агентства → партнёрский оффер (15% / под их брендом)
+            if s["cold_on"] and s.get("partners_on", True) and partners and now - st.get("partners_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
+                st["partners_ts"] = now
+                live(phase="ищу партнёров (SMM, таргетологи)")
+                try:
+                    skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u)
+                    tgs = getattr(web, "search_channels", None) if web else None
+                    for item in partners.partner_step(st.setdefault("partners", {}), skip=skip, tg_search=tgs, parse=parse_channel):
+                        st["cold_q"].insert(min(1, len(st["cold_q"])), item)      # вперемешку с бизнесами, а не за ними
+                        contacted.add(item["username"].lower())
+                        log(f"партнёр в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
+                except Exception as e:
+                    log("поиск партнёров не удался:", str(e)[:120])
                 save()
             biz_file = os.path.join(BASE, "biz_tg.json")
             if s["cold_on"] and os.path.exists(biz_file):
