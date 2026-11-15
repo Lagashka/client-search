@@ -197,7 +197,7 @@ def jsave(p, data):
     os.replace(tmp, p)
 
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True,
-            "biz_on": True, "partners_on": True}
+            "biz_on": True, "partners_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
 _SC = {"m": None, "v": dict(DEFAULTS)}
 
 def bot_key(item, kind):
@@ -317,6 +317,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import crm, autoreply, guard, zlib, human, safety
 try: import analyst                      # разбор воронки и советы по ответам (нейросеть Groq + правила)
 except Exception: analyst = None
+try: import hh_api                       # бот 4: отклики на hh.ru через официальный API (без капчи), нужны секреты HH_*
+except Exception: hh_api = None
+try: import mail_watch                   # почта: клиент ответил письмом → нейросеть разбирает, дожимы в Telegram стоп
+except Exception: mail_watch = None
 try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
     sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск бизнеса"))
     import bizhunt
@@ -1744,6 +1748,15 @@ def main():
                 except Exception as e:
                     log("поиск партнёров не удался:", str(e)[:120])
                 save()
+            # ---- 3d. почта (раз в 10 мин) и бот 4 — hh.ru через API (отклики + ответы работодателей)
+            if mail_watch and s.get("mail_on", True) and mail_watch.configured():
+                try: mail_watch.step(st, notify, log, crm)
+                except Exception as e: log("почта: сбой", str(e)[:120])
+            if hh_api and s.get("hhapi_on", True) and hh_api.configured():
+                try:
+                    hh_api.check_responses(st, notify, log)
+                    if not limited: hh_api.step(st, notify, log, s)
+                except Exception as e: log("hh.ru API: сбой", str(e)[:120])
             biz_file = os.path.join(BASE, "biz_tg.json")
             if s["cold_on"] and os.path.exists(biz_file):
                 try:
