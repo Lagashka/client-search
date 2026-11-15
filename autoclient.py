@@ -313,6 +313,8 @@ def notify(text, buttons=None, silent=False):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import crm, autoreply, guard, zlib, human
+try: import analyst                      # разбор воронки и советы по ответам (нейросеть Groq + правила)
+except Exception: analyst = None
 try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
     sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск бизнеса"))
     import bizhunt
@@ -1487,8 +1489,16 @@ def main():
                                 hold_note = (f"\n\n⏳ Если не ответишь сам за {int(hd // 60)} мин, напишу «{e['pending']['text']}». "
                                              f"Больше бот в этом чате ничего не пишет.")
                             head = "✅ СОГЛАСИЛСЯ" if verdict == crm.ST_AGREED else "🔥 ОТВЕТИЛ"
-                            notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{hold_note}\n\n{kind}: {e.get('source', '')}",
-                                   buttons=reply_buttons(u))
+                            adv, btns = "", reply_buttons(u)
+                            if analyst and s.get("advice_on", True):      # нейросеть разбирает ответ и предлагает, что написать
+                                live(phase=f"разбираю ответ @{u}")
+                                a_ = analyst.reply_advice(e, snippet)
+                                if a_:
+                                    e["advice"] = a_["reply"]
+                                    adv = (f"\n\n🧠 {a_['insight']}" if a_["insight"] else "") + f"\n💡 Можно ответить:\n«{a_['reply']}»"
+                                    btns = [[{"text": "📨 Отправить этот ответ", "callback_data": f"adv:{u}"}]] + btns
+                            notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{adv}{hold_note}\n\n{kind}: {e.get('source', '')}",
+                                   buttons=btns)
                             continue
                         autoon = s.get("autoreply", True)
                         delay = random.uniform(*AUTO_DELAY)               # отвечаем не мгновенно — как живой человек
