@@ -31,6 +31,13 @@ class BotLink:
         self.bc = load_bot_control()
         self.ctl = CloudCtl(self.bc)
         self._warned409 = False
+        if not self.ctl.cfg.get("bots_v1"):                    # один раз: показать новую кнопку «Боты 1·2·3»
+            self.ctl.cfg["bots_v1"] = True; self.ctl.save()
+            try:
+                self.bc.say("🆕 В пульте появилась кнопка " + self.bc.B_BOTS + ": там включаются и выключаются боты "
+                            "1 (вакансии), 2 (компании) и 3 (партнёры).")
+                self.bc.say(*self.bc.render_bots())
+            except Exception: pass
 
     def want(self):
         return self.ctl.running()
