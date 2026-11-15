@@ -32,13 +32,20 @@ PY = sys.executable.replace("pythonw.exe", "python.exe")
 NO_WINDOW = 0x08000000
 REPORT_HOUR = 21          # итог дня — в 21:00 по времени компьютера
 WATCHDOG_MIN = 20         # нет признаков жизни столько минут — перезапуск поиска
-DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True}
+DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True,
+            "biz_on": True, "partners_on": True}
 
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
 B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 Отправленные"
 B_SETTINGS, B_LOG, B_RESTART = "⚙️ Настройки", "📝 Лог", "♻️ Перезапуск"
 B_BASE = "🗂 База лидов"
-KEYBOARD = {"keyboard": [[{"text": B_START}, {"text": B_STOP}],
+B_BOTS = "🤖 Боты 1·2·3"
+BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на вакансии в Telegram-каналах"),
+        ("biz_on", "2️⃣ Компании", "бизнесы с hh.ru и 2ГИС → личное сообщение"),
+        ("partners_on", "3️⃣ Партнёры", "SMM-специалисты, таргетологи, агентства → партнёрство"),
+        ("cold_on", "❄️ Эксперты", "холодные письма экспертам с каналами"),
+        ("fu_on", "🔁 Дожимы", "одно напоминание тем, кто молчит")]
+KEYBOARD = {"keyboard": [[{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
                          [{"text": B_BASE}, {"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
                          [{"text": B_SETTINGS}, {"text": B_LOG}, {"text": B_RESTART}]],
             "resize_keyboard": True, "is_persistent": True}
@@ -308,7 +315,18 @@ def render_settings():
           [{"text": "🛡 Проверить аккаунт (@SpamBot)", "callback_data": "spamcheck"}]]
     return text, {"inline_keyboard": kb}
 
+def render_bots():
+    s = settings()
+    lines = [f"{'🟢' if s.get(k, True) else '⚪️'} {name} — {about}" for k, name, about in BOTS]
+    text = ("🤖 Боты — нажми, чтобы включить или выключить. Действует сразу, в облаке.\n\n" + "\n".join(lines) +
+            f"\n\nЛимиты в день: вакансии {s['limit_hot']}, компании+партнёры+эксперты+дожимы {s['limit_cold']} (меняются в ⚙️ Настройки).\n"
+            "На ответ клиента бот пишет только «Секундочку, сейчас вернусь», дальше ведёшь ты.")
+    kb = [[{"text": f"{name} {'✅' if s.get(k, True) else '❌'}", "callback_data": f"bot:{k}"}] for k, name, _ in BOTS]
+    kb.append([{"text": "✅ Включить все", "callback_data": "bot:all_on"}, {"text": "⏸ Выключить все", "callback_data": "bot:all_off"}])
+    return text, {"inline_keyboard": kb}
+
 HELP = ("Пульт поиска клиентов 🎬\n\n"
+        f"{B_BOTS} — включить/выключить бота 1 (вакансии), 2 (компании), 3 (партнёры)\n"
         f"{B_START} / {B_STOP} — включить / выключить поиск\n"
         f"{B_STATUS} — что происходит прямо сейчас и итоги дня\n"
         f"{B_REPLIES} — кто ответил, со ссылками на чаты\n"
@@ -326,7 +344,7 @@ def handle_text(ctl, text):
     if low in ("/cancel", "отмена"):
         ctl.cfg.pop("pending", None); ctl.save(); say("Ок, отменил."); return
     buttons = {B_START.lower(), B_STOP.lower(), B_STATUS.lower(), B_REPLIES.lower(), B_SENT.lower(), B_BASE.lower(),
-               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower()}
+               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower()}
     if pend and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
         to_inbox({"cmd": "send", "to": pend["to"], "text": t, "label": "✍️ Твой ответ"})
         ctl.cfg.pop("pending", None); ctl.save()
@@ -357,6 +375,8 @@ def handle_text(ctl, text):
         say(*render("log", ctl))
     elif low in (B_SETTINGS.lower(), "/settings", "настройки"):
         say(*render_settings())
+    elif low in (B_BOTS.lower(), "/bots", "боты"):
+        say(*render_bots())
     else:
         say("Не понял. Нажми кнопку внизу 👇")
 
@@ -374,6 +394,18 @@ def handle_callback(ctl, cq):
         key = data.split(":")[1]
         s = settings(); s[key] = not s[key]; jsave(SETTINGS, s)
         edit(mid, *render_settings()); answer(cq, "Сохранено")
+    elif data.startswith("bot:"):
+        key = data.split(":")[1]
+        s = settings()
+        if key in ("all_on", "all_off"):
+            for k, _, _ in BOTS: s[k] = key == "all_on"
+        elif key in {k for k, _, _ in BOTS}:
+            s[key] = not s.get(key, True)
+        jsave(SETTINGS, s)
+        edit(mid, *render_bots())
+        name = next((n for k, n, _ in BOTS if k == key), "")
+        answer(cq, ("Все боты включены" if key == "all_on" else "Все боты выключены") if key.startswith("all_") else
+               f"{name}: {'включён' if s[key] else 'выключен'}")
     elif data == "crm:csv":
         answer(cq, "Отправляю файл"); send_crm(csv_too=True)
     elif data == "spamcheck":
