@@ -35,6 +35,25 @@ BOARD = re.compile(r"ваканси|работа|резюме|фриланс|fre
 SCHOOL = re.compile(r"курс|школа|академи|обучени|обучаю|марафон|интенсив|наставничеств|университет|колледж", re.I)
 RESUME = re.compile(r"#резюме|#ищу_?работу|#ищуработу|#ищу_?клиент|#ищу_?проект|#помогу|ищу клиентов|ищу проект|беру проект|возьму проект|ищу заказ|свободн\w* для проект", re.I)
 NOT_RES = re.compile(r"#ваканси|#vacancy|ищем|требуется|в команду нужен|нужен смм|нужен smm|нужен таргетолог", re.I)
+COMPETITOR = re.compile(r"монтаж[её]р|видеомонтаж|рилсмейкер|reelsmaker|мобилограф|видеограф|моушн|motion", re.I)
+AD_NEAR = re.compile(r"(реклам\w*|\bads\b|прайс на рекламу|размещени\w*)[^@]{0,25}$", re.I)
+
+def _no_dm(text):
+    try:
+        import guard
+        return guard.no_dm(text)
+    except Exception:
+        return ""
+
+def owner_handles(desc, channel):
+    """Ники из описания канала: сначала «автор/связь/по вопросам», менеджер по рекламе — последним (он не владелец)."""
+    out = []
+    for m in re.finditer(r"@([A-Za-z][A-Za-z0-9_]{4,31})|t\.me/([A-Za-z][A-Za-z0-9_]{4,31})", desc or ""):
+        u = m.group(1) or m.group(2)
+        if u.lower() == channel.lower() or u in [x for x, _ in out]: continue
+        out.append((u, bool(AD_NEAR.search(desc[max(0, m.start() - 40):m.start()]))))
+    return [u for u, ad in sorted(out, key=lambda x: x[1])]
+
 FRESH_DAYS = 30
 SUBS = (20, 60000)
 
@@ -170,6 +189,8 @@ def scan_board(name, ch, ps, skip):
         seenp.add(p["id"])
         t = p["text"]
         if not RESUME.search(t) or NOT_RES.search(t) or not ROLE.search(t): continue
+        if COMPETITOR.search(t[:300]) and not re.search(r"таргет|smm-?специалист|smm-?менеджер", t[:300], re.I): continue   # монтажёр = конкурент
+        if _no_dm(t): continue
         if p.get("when") and (datetime.datetime.now(datetime.timezone.utc) - p["when"]).days > 14: continue
         for u in B.handles_in(t)[:2]:
             if u.lower() == name.lower(): continue
@@ -191,9 +212,11 @@ def check_channel(name, ch, ps, skip):
     fr = ps["frontier"]; known = set(ps["seen"]) | {x.lower() for x in fr}
     for n in re.findall(r"t\.me/([A-Za-z][A-Za-z0-9_]{4,31})", ch.get("desc", "")) + [l for p in ch["posts"][-10:] for l in p.get("links", [])][:20]:
         if n.lower() not in known and not n.lower().endswith("bot"): fr.append(n); known.add(n.lower())
-    if SCHOOL.search(ch.get("title", "")): return []                       # школы и курсы SMM — не партнёры (у них ученики, а не клиенты)
+    if SCHOOL.search(ch.get("title", "")) or len(SCHOOL.findall(ch.get("desc", ""))) >= 2: return []   # школы и курсы SMM — у них ученики, а не клиенты
+    if COMPETITOR.search(ch.get("title", "")): return []                   # канал монтажёра/рилсмейкера — конкурент, не партнёр
+    if _no_dm(ch.get("desc", "")): return []
     if not (SUBS[0] <= (ch.get("subs") or 0) <= SUBS[1]) or not _fresh(ch["posts"], FRESH_DAYS): return []
-    for u in B.handles_in(ch.get("desc", ""))[:3]:
+    for u in owner_handles(ch.get("desc", ""), name)[:3]:
         if u.lower() == name.lower(): continue
         if _person(u, skip):
             last = next((p["text"] for p in reversed(ch["posts"]) if len(p["text"]) > 60), "")
