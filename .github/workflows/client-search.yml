@@ -76,6 +76,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GIS_KEY: ${{ secrets.GIS_KEY }}             # 2ГИС Catalog API — поиск компаний по нишам и городам (bizhunt)
           STATE_SEED: ${{ secrets.STATE_SEED }}
           WEB_STATE_0: ${{ secrets.WEB_STATE_0 }}
           WEB_STATE_1: ${{ secrets.WEB_STATE_1 }}
