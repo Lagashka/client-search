@@ -188,6 +188,8 @@ def hh_employer_site(emp_url):
 
 # ---------------------------------------------------------------- 2. 2ГИС (официальный Catalog API)
 GIS = "https://catalog.api.2gis.com"
+NOT_CLIENT = re.compile(r"поликлиник|больниц|госпитал|№\s?\d|гбуз|мбу|фгбу|муп\b|лемана|леруа|оби\b|петрович|этажи|инвитро|"
+                        r"гемотест|кдл|хеликс|сбер|втб|альфа-банк|мтс|мегафон|билайн|теле2|пятёрочк|магнит", re.I)
 
 def gis_region(city, key, st):
     cache = st.setdefault("gis_regions", {})
@@ -196,18 +198,46 @@ def gis_region(city, key, st):
     rid = None
     try: rid = json.loads(h)["result"]["items"][0]["id"]
     except Exception: pass
-    cache[city] = rid
+    if rid: cache[city] = rid                              # неудачу не запоминаем: она бывает разовой
     return rid
+
+AGGREGATORS = re.compile(r"2gis|yandex|ya\.ru|google|zoon|prodoctorov|napopravku|flamp|otzovik|irecommend|avito|hh\.ru|"
+                         r"wikipedia|rusprofile|list-org|sbis|checko|spravker|orgpage|yell|cataloxy|duckduckgo|bing|"
+                         r"mail\.ru|ok\.ru|youtube|instagram|tiktok|pinterest|cian|domclick|realty\.ya|tripadvisor|docdoc|sberhealth", re.I)
+
+def find_site(name, city):
+    """Сайт компании по названию и городу (у демо-ключа 2ГИС контакты закрыты). Возвращает (сайт, ссылки_на_t.me)."""
+    q = f"{name} {city}"
+    h = fetch("https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": q}), timeout=20)
+    if not h: return "", []
+    h = urllib.parse.unquote(h)
+    tg = TME.findall(h)
+    site = ""
+    for u in re.findall(r"uddg=(https?://[^&\"]+)", h):
+        d = domain_of(u)
+        if not d or AGGREGATORS.search(d): continue
+        if re.search(r"vk\.(com|ru)|t\.me", d): continue
+        site = "https://" + d; break
+    return site, tg[:3]
 
 def gis_search(query, city, key, st, page=1, min_reviews=15):
     rid = gis_region(city, key, st)
     if not rid: return [], "регион не найден"
     params = {"q": query, "region_id": rid, "type": "branch", "page": page, "page_size": 10, "key": key,
               "fields": "items.contact_groups,items.rubrics,items.reviews,items.org,items.address"}
-    h = fetch(f"{GIS}/3.0/items?" + urllib.parse.urlencode(params), timeout=25)
-    if h is None: return [], "нет ответа"
-    try: j = json.loads(h)
-    except Exception: return [], "не JSON"
+    for attempt in range(3):                                # демо-ключ иногда отвечает 403 на частые запросы — повторяем с паузой
+        h = fetch(f"{GIS}/3.0/items?" + urllib.parse.urlencode(params), timeout=25)
+        if h is None:
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(f"{GIS}/3.0/items?" + urllib.parse.urlencode(params), headers={"User-Agent": UA}), timeout=25)
+                h = r.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as e: h = e.read().decode("utf-8", "replace")
+            except Exception: h = None
+        try: j = json.loads(h or "")
+        except Exception: j = {}
+        if (j.get("meta") or {}).get("code") == 200: break
+        time.sleep(5 * (attempt + 1))
+    if not j: return [], "нет ответа"
     code = (j.get("meta") or {}).get("code")
     if code != 200: return [], f"код {code}: {(j.get('meta') or {}).get('error', {}).get('message', '')}"
     out = []
@@ -215,6 +245,8 @@ def gis_search(query, city, key, st, page=1, min_reviews=15):
         rv = it.get("reviews") or {}
         cnt = rv.get("general_review_count") or rv.get("org_review_count") or 0
         if cnt < min_reviews: continue                      # мелочь без отзывов обычно без бюджета
+        nm = it.get("name", "")
+        if cnt > 1500 or NOT_CLIENT.search(nm): continue    # госучреждения и федеральные сети: решения принимают не на месте
         org = (it.get("org") or {}).get("id") or it.get("id")
         c = {"emails": [], "tg": [], "socials": {}, "site": ""}
         for g in it.get("contact_groups") or []:
@@ -585,7 +617,7 @@ def push_tg(c):
     if any(x["username"].lower() == c["tg"][0].lower() for x in q): return
     q.append(tg_item(c)); jsave(TG_QUEUE, q)
 
-def tg_step(st, skip=lambda u: False, max_prepare=3):
+def tg_step(st, skip=lambda u: False, max_prepare=3, tg_search=None):
     """Шаг для основного бота (autoclient): поиск + до max_prepare компаний → готовые сообщения в Telegram.
     st — словарь внутри state.json основного бота (st["biz"]), поэтому база переживает перезапуски облака.
     skip(username) — True, если этому человеку уже писали / он в стоп-листе."""
@@ -598,7 +630,9 @@ def tg_step(st, skip=lambda u: False, max_prepare=3):
     for c in sorted((c for c in st["companies"].values() if c.get("status") == "new"), key=lambda c: -priority(c)):
         if n >= max_prepare: break
         n += 1
-        try: prepare_one(c)
+        if c["source"] == "2gis" and not tg_search:                # без Telegram Web 2ГИС-компании не обработать — ждут
+            n -= 1; continue
+        try: prepare_one(c, tg_search)
         except Exception as e: log("обогащение не удалось:", c.get("name"), str(e)[:80])
         c["tg"] = [u for u in c.get("tg", []) if not skip(u)]
         if c.get("stop"): c["status"] = "stop"; continue
@@ -704,7 +738,21 @@ def prepare(cfg, st):
         log(f"письмо готово [{L['by']}]: {c['name']} — {c.get('city')} — почта {c.get('emails')[:1]} tg {c.get('tg')[:1]}")
     return n
 
-def prepare_one(c):
+def name_match(company, title):
+    words = [w for w in re.findall(r"[a-zа-яё0-9]{4,}", (company or "").lower()) if w not in ("клиника", "центр", "студия", "салон", "компания")]
+    t = (title or "").lower()
+    return bool(words) and any(w in t for w in words)
+
+def prepare_one(c, tg_search=None):
+    # 2ГИС (демо-ключ без контактов): ищем канал компании через поиск Telegram — «название + город», как человек в строке поиска.
+    # Поисковики (DuckDuckGo/Bing) режут автоматические запросы — их не используем.
+    if c["source"] == "2gis" and tg_search and not c.get("tg_raw"):
+        try: names = list(tg_search(f"{c['name']} {c.get('city', '')}"))[:5]
+        except Exception as e: names = []; log("поиск в Telegram не удался:", str(e)[:80])
+        for n in names:
+            if tg_kind(n) in ("channel", "group") and name_match(c["name"], (TG_INFO.get(n.lower()) or {}).get("title")):
+                c["tg_raw"] = [n]; break
+            time.sleep(0.5)
     if c["source"] == "hh":
         if c.get("vacancy_url"):
             c["tg_vacancy"], stop = hh_vacancy_contacts(c["vacancy_url"]); time.sleep(1.5)
