@@ -210,7 +210,9 @@ def bot_key(item, kind):
 
 def pick_allowed(q, kind, s):
     """Первое письмо в очереди, чей бот включён, — переставить в начало (отправка берёт q[0])."""
+    h = datetime.datetime.now().hour
     for i, x in enumerate(q):
+        if x.get("variant") in ("BIZ", "PARTNER") and not (9 <= h < 20): continue   # компаниям и партнёрам — только в рабочее время
         if s.get(bot_key(x, kind), True):
             if i: q.insert(0, q.pop(i))
             return q[0]
@@ -312,7 +314,7 @@ def notify(text, buttons=None, silent=False):
         log("бот не отправил уведомление:", str(e)[:80])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import crm, autoreply, guard, zlib, human
+import crm, autoreply, guard, zlib, human, safety
 try: import analyst                      # разбор воронки и советы по ответам (нейросеть Groq + правила)
 except Exception: analyst = None
 try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
@@ -561,6 +563,10 @@ def followup_text(entry):
             return lead + ", " + sp("подскажите, вакансия ещё актуальна? Если да, сделаю тест к вечеру, окей?",
                                     "вакансия ещё открыта? Могу сегодня сделать тест на 10–15 секунд, а там решим вопрос",
                                     "уточню, поиск ещё актуален? Если да, покажу тест на вашем материале")
+        if entry.get("variant") == "BIZ":                   # компании: без «вашего канала» и «серии под ваш канал»
+            return lead + ", " + sp("вернусь к своему сообщению про ролики) если видео сейчас не в планах, напишите «нет», больше не побеспокою",
+                                    "коротко напомню, предложение в силе, могу бесплатно расписать 3 идеи роликов под вашу компанию, а если не актуально, так и напишите",
+                                    "пишу ещё раз, последний) если ролики понадобятся, буду на связи, а пока могу бесплатно накидать пару идей под вас")
         if entry.get("variant") == "PARTNER":
             return lead + ", " + sp("вернусь к своему сообщению про партнёрство) если видео у ваших клиентов сейчас не в задачах, напишите «нет», больше не побеспокою",
                                     "коротко напомню про партнёрство по видео: ролики под вашим брендом, ваша наценка 20%. Если не актуально, просто ответьте «нет»",
@@ -1484,7 +1490,7 @@ def main():
                                 notify(f"❌ Отказ: {e.get('display', '')} (@{u})\n«{snippet}»", buttons=link, silent=True)
                                 continue
                             hold_note = ""
-                            if first and not e.get("human") and not e.get("hold_sent") and in_hours(AUTO_HOURS):
+                            if first and not e.get("human") and not e.get("hold_sent") and in_hours(AUTO_HOURS) and not safety.soft_no(snippet):
                                 hd = random.uniform(*HOLD_DELAY)
                                 e["hold_sent"] = 1
                                 e["pending"] = {"text": random.choice(HOLD_TEXTS), "due": now + hd, "src": "hold", "bye": 1}
@@ -1495,15 +1501,17 @@ def main():
                             pn = e.get("pain") or {}
                             if pn.get("pain"):                            # что нейросеть поняла о нём ещё до диалога
                                 adv += f"\n\n🎯 Его боль: {pn['pain']}" + (f"\n✅ Что предложить: {pn['solution']}" if pn.get("solution") else "")
-                            if analyst and s.get("advice_on", True):      # нейросеть разбирает ответ и предлагает, что написать
+                            notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{adv}{hold_note}\n\n{kind}: {e.get('source', '')}",
+                                   buttons=btns)                          # сначала сразу уведомление — нейросеть его не задерживает
+                            if analyst and s.get("advice_on", True):      # потом нейросеть разбирает ответ и предлагает, что написать
                                 live(phase=f"разбираю ответ @{u}")
                                 a_ = analyst.reply_advice(e, snippet)
                                 if a_:
-                                    e["advice"] = a_["reply"]
-                                    adv += (f"\n\n🧠 {a_['insight']}" if a_["insight"] else "") + f"\n💡 Можно ответить:\n«{a_['reply']}»"
-                                    btns = [[{"text": "📨 Отправить этот ответ", "callback_data": f"adv:{u}"}]] + btns
-                            notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{adv}{hold_note}\n\n{kind}: {e.get('source', '')}",
-                                   buttons=btns)
+                                    e["advice"] = a_["reply"]; e["advice_ts"] = time.time(); save()
+                                    notify(f"🧠 Совет по @{u}" + (f"\n{a_['insight']}" if a_["insight"] else "") +
+                                           f"\n\n💡 Можно ответить:\n«{a_['reply']}»",
+                                           buttons=[[{"text": "📨 Отправить этот ответ", "callback_data": f"adv:{u}"}],
+                                                    [{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]], silent=True)
                             continue
                         autoon = s.get("autoreply", True)
                         delay = random.uniform(*AUTO_DELAY)               # отвечаем не мгновенно — как живой человек
@@ -1544,6 +1552,8 @@ def main():
                     p = e.get("pending")
                     if not p or now < p["due"]: continue
                     e.pop("pending", None)
+                    if p.get("src") == "hold" and (now - p["due"] > 15 * 60 or e.get("human")):
+                        log(f"«секундочку» @{u} не шлю: опоздало или ты уже ответил сам"); save(); continue   # «секундочку» через 8 часов — странно
                     known = bot_out(e)
                     try: rr = web.send_reply(u, e.get("peer"), p["text"], auto=True, known_out=known)
                     except Limited: raise
@@ -1640,6 +1650,7 @@ def main():
                     else:
                         q = st["hot_q"] if kind == "hot" else st["cold_q"]
                         risk = "" if mine(item["username"]) else "контакт второй половины команды"
+                        risk = risk or safety.pre_send(kind, item, st["sent"])   # свои, боты, дубли между ботами, мусор в тексте
                         risk = risk or guard.check_before_send(kind, item)   # последняя проверка: тот ли человек и не против ли он
                         if risk:
                             q.pop(0); bad.add(item["username"].lower())
@@ -1656,11 +1667,16 @@ def main():
                         item["text"] = human.humanize(item["text"], allow_link=(kind == "hot"))   # последний фильтр «пишет человек»
                         bw = human.looks_bot(item["text"], allow_link=(kind == "hot"))
                         if bw: log(f"⚠️ письмо @{item['username']} всё ещё похоже на бота: {bw}")
+                        hs = st.setdefault("text_hashes", [])
+                        item["text"] = safety.vary(item["text"], set(hs))    # один и тот же текст двум людям — признак спама
+                        if safety.JUNK.search(item["text"]) or len(item["text"]) < 60:   # нейросеть/фильтр испортили текст
+                            q.pop(0); log(f"НЕ ПИШУ @{item['username']}: текст испорчен после обработки"); save(); continue
                         try: r, peer = web.send_new(item["username"], item["text"])
                         except Limited: raise
                         except Exception as ex: r, peer = "fail:" + str(ex).splitlines()[0][:100], None
                         if r == "sent":
                             q.pop(0); d[kind] += 1; fails = 0
+                            st["text_hashes"] = (st.get("text_hashes", []) + [safety.text_hash(item["text"])])[-500:]
                             st["sent"][item["username"]] = {"kind": kind, "peer": peer, "ts": now, "date": today(),
                                 "display": item["display"], "variant": item.get("variant"),
                                 "source": item.get("post") or item.get("source"), "text": item["text"],
@@ -1698,7 +1714,9 @@ def main():
                 live(why="пауза между сообщениями", next_send=next_send)
 
             # ---- 3b. бизнесы из «Поиск бизнеса\bizhunt.py» (hh.ru + 2ГИС) — готовые письма в общую холодную очередь
-            if s.get("biz_on", True) and bizhunt and now - st.get("biz_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
+            st["cold_q"] = [x for x in st["cold_q"] if now - x.get("found", now) < 7 * 86400]   # письмо недельной давности уже не к месту
+            nq = lambda v: sum(1 for x in st["cold_q"] + st["hot_q"] if x.get("variant") == v)   # у каждого бота свой потолок очереди
+            if s.get("biz_on", True) and bizhunt and now - st.get("biz_ts", 0) > 15 * 60 and nq("BIZ") < 15:
                 st["biz_ts"] = now
                 live(phase="ищу бизнесы (hh.ru / 2ГИС)")
                 try:
@@ -1713,7 +1731,7 @@ def main():
                     log("поиск бизнеса не удался:", str(e)[:120])
                 save()
             # ---- 3c. бот 3 «партнёры»: SMM-специалисты, таргетологи, агентства → партнёрский оффер (15% / под их брендом)
-            if s.get("partners_on", True) and partners and now - st.get("partners_ts", 0) > 15 * 60 and len(st["cold_q"]) < 30:
+            if s.get("partners_on", True) and partners and now - st.get("partners_ts", 0) > 15 * 60 and nq("PARTNER") < 15:
                 st["partners_ts"] = now
                 live(phase="ищу партнёров (SMM, таргетологи)")
                 try:
@@ -1741,7 +1759,7 @@ def main():
                     log("biz_tg.json не прочитан:", str(e)[:80])
 
             # ---- 4. поиск холодных — в паузах между отправками
-            if s["cold_on"] and len(st["cold_q"]) < 30:
+            if s["cold_on"] and sum(1 for x in st["cold_q"] if x.get("variant") not in ("BIZ", "PARTNER")) < 30:
                 if not frontier:
                     if not st.get("seeded"):
                         frontier.extend(s for s in SEEDS if s.lower() not in seen); st["seeded"] = True
