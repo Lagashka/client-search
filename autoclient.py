@@ -312,7 +312,7 @@ def notify(text, buttons=None, silent=False):
         log("бот не отправил уведомление:", str(e)[:80])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import crm, autoreply, guard, zlib
+import crm, autoreply, guard, zlib, human
 try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
     sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск бизнеса"))
     import bizhunt
@@ -526,21 +526,29 @@ def compose_hot(post, ch_title, display, bio=""):
             mine = sp("Делаю по ТЗ, держу один стиль и сдаю короткий ролик за 1–2 дня",
                       "Работаю по ТЗ, в одном стиле и в срок, короткий ролик за 1–2 дня")
         m2 = f"{understand}. {mine}"
-        extra = sp("Я не только монтирую, а продюсирую ролики под ключ: стратегия, сценарии, раскадровка и монтаж, можно взять весь цикл или только монтаж",
-                   "Продюсирую ролики под ключ, не только монтаж: сценарии, раскадровка, хук и звук, а если нужен один монтаж, беру его отдельно",
-                   "Веду проект под ключ, как продюсер: сценарии, раскадровка, монтаж, можно взять весь цикл или только монтаж",
-                   "Беру ролики под ключ как продюсер: стратегия, сценарии, раскадровка и монтаж, а если нужен только монтаж, делаю его одним")
-        if shoot: extra += ". " + sp("Съёмку не беру, снимаете вы на телефон, остальное беру на себя",
-                                     "Снимаете вы на телефон, а сценарий, раскадровку и монтаж беру на себя")
+        extra = sp("я продюсирую ролики под ключ, от сценария до монтажа, но и просто монтаж тоже беру",
+                   "по сути я продюсирую ролики под ключ, со сценарием и раскадровкой, а могу взять только монтаж",
+                   "я делаю ролики под ключ как продюсер, сценарий, раскадровка и монтаж, или только монтаж, как вам удобнее",
+                   "могу взять только монтаж, а могу весь ролик под ключ как продюсер, начиная со сценария")
+        if shoot: extra += ", " + sp("снимаете вы на телефон, остальное на мне",
+                                     "съёмка с вашей стороны на телефон, всё остальное беру на себя")
         offer = sp("Могу бесплатно сделать 10–15 секунд из вашего материала за сутки, глянете уровень, а там решим вопрос",
                    "Предлагаю так, сделаю тест на 10–15 секунд бесплатно, за сутки после исходника, а там сами глянете, подходит или нет",
                    "Могу для начала бесплатно смонтировать 10–15 секунд за сутки, а там уже сами глянете, нужно вам такое или нет")
-        ask = sp("Какой формат у вас сейчас?", "К какому числу нужен первый ролик?", "Скинете исходник?")
-        lines = [f"{offer}. {extra}. {ask}"]
-        if price: lines.append("По цене: серия из 5 роликов под ключ 19 000 ₽, отдельный монтаж от 3 000 ₽")
-        lines.append(f"Работы здесь: {PORTFOLIO}" + (f", похожий пример: {CASE}" if case else ""))
-        return "\n\n".join([m1, m2, "\n".join(lines)])
-    return autoreply.voicefy(unique("hot", build))
+        ask = sp("какой формат у вас сейчас?", "к какому числу нужен первый ролик?", "скинете исходник?", "как вам?")
+        works = sp("работы можно глянуть тут", "мои ролики вот тут", "что делаю, можно посмотреть здесь") + " " + PORTFOLIO.replace("https://", "")
+        if case: works += sp(", и похожий по теме ", ", вот похожий по нише ") + CASE.replace("https://", "")
+        tail = f"{offer}, {ask}"
+        if price: tail += "\n" + sp("По цене, монтаж ролика от 3 000 ₽, серия из 5 под ключ 19 000 ₽",
+                                    "Если по деньгам, монтаж от 3 000 ₽ за ролик, серия из 5 под ключ 19 000 ₽")
+        works = works[:1].upper() + works[1:]
+        m1 = f"{m1}, {extra}"                         # сразу кто я: «увидел вакансию, я продюсирую ролики под ключ…»
+        m2 = understand if (len(understand) + len(mine) > 230 or human.LIST4.search(mine)) else f"{understand}. {mine}"   # одна мысль, не простыня
+        return "\n\n".join([m1, m2, f"{tail}\n{works}"])
+    for _ in range(12):                              # пересобираем, пока текст не пройдёт фильтр «пишет человек»
+        t = human.humanize(autoreply.voicefy(unique("hot", build)), allow_link=True)
+        if not human.looks_bot(t, allow_link=True): break
+    return t
 
 def followup_text(entry):
     fn = first_name(entry.get("display", ""))
@@ -653,8 +661,15 @@ def compose_cold(ch, display, niche, variant):
     subs, views = fmt_num(ch["subs"]), fmt_num(ch["avg_views"])
 
     def build(sp):
-        if topic:
+        about = None
+        if topic and re.match(r"(как|почему|что|зачем|когда|сколько|где|можно ли)\b", topic, re.I):
+            about = "про то, " + topic[:1].lower() + topic[1:]          # пост своими словами, а не цитатой
+        if about:
+            obs = sp(f"прочитал ваш пост {about}", f"зацепил ваш пост {about}", f"наткнулся на ваш пост {about}")
+        elif topic and len(topic) <= 38:
             obs = sp(f"прочитал ваш пост «{topic}»", f"зацепил ваш пост «{topic}»", f"наткнулся на ваш пост «{topic}»")
+        elif topic:
+            obs = sp("прочитал ваш последний пост, зацепило", "почитал канал, особенно зашёл последний пост", "наткнулся на ваш канал, прочитал пару последних постов")
         else:
             obs = sp("зашёл на ваш канал, понравилась подача", "почитал ваш канал, сильная подача")
         m1 = f"{_head(sp, fn)}, {obs}"
@@ -669,17 +684,17 @@ def compose_cold(ch, display, niche, variant):
             pain += sp(f", да и при {subs} подписчиках посты набирают около {views} просмотров, остальные их просто не видят",
                        f", плюс подписчиков {subs}, а просмотров у постов около {views}, большая часть аудитории их не видит")
         pain = pain[0].upper() + pain[1:]
-        who = sp("Я Егор, продюсирую для экспертов ролики под ключ (стратегия, сценарии, раскадровка, монтаж)",
-                 "Я Егор, веду ролики для экспертов под ключ как продюсер (стратегия, сценарии, раскадровка, монтаж)")
+        who = sp("Я Егор, продюсирую для экспертов ролики под ключ, от сценария до монтажа",
+                 "Я Егор, по сути продюсирую ролики под ключ, со сценарием и раскадровкой, вам остаётся снять на телефон",
+                 "Я Егор, делаю ролики под ключ как продюсер, от сценария до готового видео")
         offer = {"A": sp("Предлагаю так, бесплатно набросаю схему серии из 5 роликов под ваш канал, а вы глянете, подходит или нет. Скинуть?",
                          "Могу бесплатно расписать серию из 5 роликов по вашим темам, а там уже сами глянете, нужно вам такое или нет. Скинуть?"),
                  "B": sp("Могу бесплатно смонтировать 15 секунд из вашего видео за сутки, а там сами глянете, нужно вам такое или нет. Скинете исходник?",
                          "Предлагаю так, бесплатно сделаю 15 секунд из вашего видео за сутки, сравните сами) пришлёте любой исходник?"),
                  "C": sp("Серия из 5 роликов под ключ стоит 19 000 ₽, беру не больше 5 клиентов в месяц, сейчас есть место. Обсудим?",
                          "Серия из 5 роликов под ключ, 19 000 ₽, постоянных клиентов беру не больше пяти, сейчас есть окно. Интересно?")}[variant]
-        proof = f"Пример по ипотеке: {CASE}" if case_fits else f"Работы здесь: {PORTFOLIO}"
-        return "\n\n".join([m1, pain, f"{who}. {offer}\n{proof}"])
-    return autoreply.voicefy(unique(f"cold-{variant}", build))
+        return "\n\n".join([m1, pain, f"{who}. {offer}"])           # без ссылок: незнакомому их шлём только после ответа
+    return human.humanize(autoreply.voicefy(unique(f"cold-{variant}", build)))
 
 def pick_variant(st):
     """A/B/C: пока мало данных — поровну, потом 80% лучшему по доле ответов."""
@@ -1344,7 +1359,12 @@ def main():
                         fm = autoreply.first_message(post["text"], u, dn, bio) if autoreply.llm_on() else None
                         if fm and not fm["fit"]:
                             log(f"не наш профиль, пропускаю @{u}: {fm['reason']}"); continue
-                        if fm: text = fm["text"]
+                        if fm:
+                            text = human.humanize(fm["text"], allow_link=True)
+                            bot_why = human.looks_bot(text, allow_link=True)
+                            if bot_why:                         # ИИ написал «как бот» — берём человеческий шаблон
+                                log(f"ИИ-письмо похоже на бота ({bot_why}), беру шаблон: @{u}"); fm = None
+                        if fm: pass
                         else:                                   # бесплатный режим: фильтр + боли по нише без ИИ
                             ok, why = autoreply.rule_fit(post["text"])
                             if not ok:
@@ -1582,7 +1602,10 @@ def main():
                     if kind == "fu":
                         e = st["sent"][item]
                         tm = e.pop("_tm", None)                        # t3 / t7 — касание после цены; иначе обычный дожим
-                        try: r = web.send_followup(item, e["peer"], touch_text(e, tm) if tm else (autoreply.followup_message(e) or followup_text(e)), known_out=e.get("n_out", 1))
+                        fu_txt = touch_text(e, tm) if tm else (autoreply.followup_message(e) or "")
+                        if not tm and (not fu_txt or human.looks_bot(human.humanize(fu_txt))): fu_txt = followup_text(e)   # ИИ-дожим «как бот» → шаблон
+                        fu_txt = human.humanize(fu_txt)
+                        try: r = web.send_followup(item, e["peer"], fu_txt, known_out=e.get("n_out", 1))
                         except Limited: raise
                         except Exception as ex: r = "fail:" + str(ex).splitlines()[0][:100]
                         if r == "replied":
@@ -1608,6 +1631,9 @@ def main():
                             log(f"НЕ ПИШУ @{item['username']}: {risk}"); save()
                             next_send = time.time() + 5
                             continue
+                        item["text"] = human.humanize(item["text"], allow_link=(kind == "hot"))   # последний фильтр «пишет человек»
+                        bw = human.looks_bot(item["text"], allow_link=(kind == "hot"))
+                        if bw: log(f"⚠️ письмо @{item['username']} всё ещё похоже на бота: {bw}")
                         try: r, peer = web.send_new(item["username"], item["text"])
                         except Limited: raise
                         except Exception as ex: r, peer = "fail:" + str(ex).splitlines()[0][:100], None
@@ -1730,7 +1756,11 @@ def main():
                                     if dn is None: bad.add(ul); continue
                                     v = pick_variant(st)
                                     live(phase=f"пишу письмо для @{u}")
-                                    txt = autoreply.cold_message(ch, dn, niche, v) or compose_cold(ch, dn, niche, v)   # ИИ изучил канал → письмо лично ему
+                                    txt = autoreply.cold_message(ch, dn, niche, v)   # ИИ изучил канал → письмо лично ему
+                                    if txt:
+                                        txt = human.humanize(re.sub(r"[^\n]*(https?://|t\.me/)\S*[^\n]*", "", txt))   # без ссылок незнакомому
+                                        if human.looks_bot(txt): log("ИИ-письмо похоже на бота:", human.looks_bot(txt)); txt = None
+                                    txt = txt or compose_cold(ch, dn, niche, v)
                                     st["cold_q"].append({"username": u, "display": dn, "variant": v, "niche": niche, "uniq": 1,
                                                          "source": f"https://t.me/{name}",
                                                          "text": txt})
