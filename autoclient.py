@@ -1373,6 +1373,8 @@ def main():
                                 log(f"не наш профиль, пропускаю @{u}: {why}"); continue
                             text = compose_hot(post, c["title"] or chn, dn, bio)
                         st["hot_q"].append({"username": u, "display": dn, "post": link, "found": now, "uniq": 1,
+                                            "ctx": (f"Вакансия в канале «{c['title'] or chn}»:\n{post['text'][:1500]}\n"
+                                                    f"Био автора в Telegram: {bio or 'нет'}")[:2000],
                                             "text": text})
                         contacted.add(u.lower()); new += 1
                         log(f"ВАКАНСИЯ: @{u} ({dn}) ← {link}")
@@ -1490,12 +1492,15 @@ def main():
                                              f"Больше бот в этом чате ничего не пишет.")
                             head = "✅ СОГЛАСИЛСЯ" if verdict == crm.ST_AGREED else "🔥 ОТВЕТИЛ"
                             adv, btns = "", reply_buttons(u)
+                            pn = e.get("pain") or {}
+                            if pn.get("pain"):                            # что нейросеть поняла о нём ещё до диалога
+                                adv += f"\n\n🎯 Его боль: {pn['pain']}" + (f"\n✅ Что предложить: {pn['solution']}" if pn.get("solution") else "")
                             if analyst and s.get("advice_on", True):      # нейросеть разбирает ответ и предлагает, что написать
                                 live(phase=f"разбираю ответ @{u}")
                                 a_ = analyst.reply_advice(e, snippet)
                                 if a_:
                                     e["advice"] = a_["reply"]
-                                    adv = (f"\n\n🧠 {a_['insight']}" if a_["insight"] else "") + f"\n💡 Можно ответить:\n«{a_['reply']}»"
+                                    adv += (f"\n\n🧠 {a_['insight']}" if a_["insight"] else "") + f"\n💡 Можно ответить:\n«{a_['reply']}»"
                                     btns = [[{"text": "📨 Отправить этот ответ", "callback_data": f"adv:{u}"}]] + btns
                             notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{adv}{hold_note}\n\n{kind}: {e.get('source', '')}",
                                    buttons=btns)
@@ -1641,6 +1646,13 @@ def main():
                             log(f"НЕ ПИШУ @{item['username']}: {risk}"); save()
                             next_send = time.time() + 5
                             continue
+                        if analyst and s.get("pain_on", True) and item.get("ctx") and "pain" not in item:
+                            live(phase=f"ищу боль @{item['username']} (нейросеть)")   # до диалога: вакансия, канал, био → боль + решение
+                            pn = analyst.lead_pain(item, kind)
+                            item["pain"] = pn or {}
+                            if pn:
+                                item["text"] = analyst.inject(item["text"], pn["line"])
+                                log(f"боль @{item['username']}: {pn['pain'][:120]}")
                         item["text"] = human.humanize(item["text"], allow_link=(kind == "hot"))   # последний фильтр «пишет человек»
                         bw = human.looks_bot(item["text"], allow_link=(kind == "hot"))
                         if bw: log(f"⚠️ письмо @{item['username']} всё ещё похоже на бота: {bw}")
@@ -1652,6 +1664,7 @@ def main():
                             st["sent"][item["username"]] = {"kind": kind, "peer": peer, "ts": now, "date": today(),
                                 "display": item["display"], "variant": item.get("variant"),
                                 "source": item.get("post") or item.get("source"), "text": item["text"],
+                                "pain": item.get("pain") or {},
                                 "n_out": getattr(web, "last_parts", 1) or 1}
                             crm_sync()
                             log(f"ОТПРАВЛЕНО [{'вакансия' if kind == 'hot' else 'холодное'}] @{item['username']} — сегодня: "
@@ -1773,6 +1786,9 @@ def main():
                                     txt = txt or compose_cold(ch, dn, niche, v)
                                     st["cold_q"].append({"username": u, "display": dn, "variant": v, "niche": niche, "uniq": 1,
                                                          "source": f"https://t.me/{name}",
+                                                         "ctx": (f"Канал эксперта «{ch['title']}», {ch['subs']} подписчиков, средние просмотры {ch['avg_views']}, "
+                                                                 f"постов с видео {int(100 * ch['videos'] / max(ch['n_posts'], 1))}%\nОписание: {ch['desc'][:400]}\n"
+                                                                 "Последние посты:\n" + "\n".join("- " + p[:250] for p in ch["posts"][-5:]))[:2000],
                                                          "text": txt})
                                     contacted.add(ul)
                                     log(f"холодный лид: @{u} ({dn}) ← @{name}, {ch['subs']} подп., {niche}, вариант {v}")
