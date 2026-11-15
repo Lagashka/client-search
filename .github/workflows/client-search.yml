@@ -77,6 +77,15 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GIS_KEY: ${{ secrets.GIS_KEY }}             # 2ГИС Catalog API — поиск компаний по нишам и городам (bizhunt)
+          HH_CLIENT_ID: ${{ secrets.HH_CLIENT_ID }}   # бот 4: отклики на hh.ru через официальный API (hh_api.py)
+          HH_CLIENT_SECRET: ${{ secrets.HH_CLIENT_SECRET }}
+          HH_ACCESS: ${{ secrets.HH_ACCESS }}
+          HH_REFRESH: ${{ secrets.HH_REFRESH }}
+          HH_EXP: ${{ secrets.HH_EXP }}
+          HH_UA: ${{ secrets.HH_UA }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}         # почта: только чтение, пароль приложения (mail_watch.py)
+          MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          MAIL_IMAP: ${{ secrets.MAIL_IMAP }}
           STATE_SEED: ${{ secrets.STATE_SEED }}
           WEB_STATE_0: ${{ secrets.WEB_STATE_0 }}
           WEB_STATE_1: ${{ secrets.WEB_STATE_1 }}
