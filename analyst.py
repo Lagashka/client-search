@@ -9,7 +9,7 @@
 """
 import re, json, time, datetime, collections
 
-BOTS = {"hot": "1 Вакансии", "BIZ": "2 Компании", "PARTNER": "3 Партнёры", "cold": "Эксперты (холодные)"}
+BOTS = {"hot": "1 Вакансии", "BIZ": "2 Компании", "PARTNER": "3 Партнёры", "HH": "4 hh.ru", "cold": "Эксперты (холодные)"}
 SAFE = {"hot_on": (True, False), "biz_on": (True, False), "partners_on": (True, False), "cold_on": (True, False),
         "fu_on": (True, False), "limit_hot": (25, 40, 60), "limit_cold": (10, 20, 30, 40), "gap": (60, 90, 180, 300)}
 REASONS = [("дорого / цена", r"дорог|бюджет|не потян|дешевле|цен[аы] высок|не по карману"),
@@ -52,6 +52,14 @@ def metrics(st, log_text="", settings=None, days=7):
     biz = collections.Counter(c.get("status") for c in ((st.get("biz") or {}).get("companies") or {}).values())
     pt = st.get("partners") or {}
     s = settings or {}
+    hh = [a for a in ((st.get("hh_api") or {}).get("applied") or {}).values() if a.get("ts", 0) >= since]
+    if hh:
+        b = per["HH"]
+        b["sent"] = len(hh)
+        b["replied"] = sum(1 for a in hh if a.get("state") not in (None, "response"))
+        b["refused"] = sum(1 for a in hh if a.get("state") == "discard")
+        b["hot"] = sum(1 for a in hh if a.get("state") in ("invitation", "interview"))
+        b["agreed"] = sum(1 for a in hh if a.get("state") in ("offer", "hired"))
     return {"days": days, "bots": {BOTS[k]: {kk: vv for kk, vv in v.items()} for k, v in per.items()},
             "reasons": dict(reasons), "log": logm,
             "queues": {"вакансии": len(st.get("hot_q") or []), "холодная": len(st.get("cold_q") or [])},
@@ -129,7 +137,7 @@ def report(st, log_text="", settings=None, days=7, use_llm=True):
     """→ (текст для Telegram, [действия {label, set}])"""
     m = metrics(st, log_text, settings, days)
     rows = []
-    for name in ("1 Вакансии", "2 Компании", "3 Партнёры", "Эксперты (холодные)"):
+    for name in ("1 Вакансии", "2 Компании", "3 Партнёры", "4 hh.ru", "Эксперты (холодные)"):
         b = m["bots"].get(name)
         if not b: rows.append(f"• {name}: писем 0"); continue
         pct = f"{100 * b['replied'] // b['sent']}%" if b["sent"] else "0%"
