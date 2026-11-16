@@ -218,6 +218,93 @@ def pick_allowed(q, kind, s):
             return q[0]
     return None
 
+# ---- 16.11: честная очередь между ботами. Раньше холодные (боты 2–3, эксперты) шли только при пустой очереди
+# вакансий — она не пустеет никогда, и боты 2–3 не написали ни одного письма. Теперь отправка идёт по кругу.
+SLOTS = ("hot", "BIZ", "PARTNER", "cold", "fu")          # порядок круга: каждый бот получает свою очередь
+SLOT_BOT = {"hot": "hot_on", "BIZ": "biz_on", "PARTNER": "partners_on", "cold": "cold_on", "fu": "fu_on"}
+SLOT_NAME = {"hot": "1️⃣ Вакансии", "BIZ": "2️⃣ Компании", "PARTNER": "3️⃣ Партнёры", "cold": "❄️ Эксперты", "fu": "🔁 Дожимы"}
+HEALTH_IDLE_H = 24        # включённый бот столько часов без единой отправки — уведомление с причиной
+
+def slot_of(item, kind):
+    """Из какого бота письмо: вакансии (вся очередь hot_q), 2 компании, 3 партнёры, эксперты."""
+    if kind == "hot": return "hot"
+    v = item.get("variant")
+    return v if v in ("BIZ", "PARTNER") else "cold"
+
+def first_index(q, kind, s, slot):
+    """Индекс первого письма нужного бота (бот включён), или None. Очередь не трогает."""
+    for i, x in enumerate(q):
+        if slot_of(x, kind) == slot and s.get(bot_key(x, kind), True): return i
+    return None
+
+def next_slot(avail, last):
+    """Следующий по кругу бот после last, у которого есть что отправить."""
+    order = list(SLOTS)
+    if last in order:
+        i = order.index(last) + 1; order = order[i:] + order[:i]
+    return next((k for k in order if k in avail), None)
+
+def plan_send(st, s, d, now, lim_hot, warm, hot_hours=True, cold_hours=True):
+    """Что отправить сейчас: ("hot"|"cold", письмо из q[0]) / ("fu", ник) / None.
+    Каждый бот со своей очередью — кандидат, выбор по кругу SLOTS после st["last_kind"]. Лимиты: вакансии lim_hot,
+    компании+партнёры+эксперты limit_cold, дожимы limit_fu. В мягком режиме (warm) — только вакансии."""
+    cand = {}                                    # slot → ("hot"/"cold", индекс) или ("fu", ник, касание)
+    if (s.get("hot_on", True) or s.get("biz_on", True)) and hot_hours and d["hot"] < lim_hot:
+        st["hot_q"] = [x for x in st["hot_q"] if now - x["found"] < 48 * 3600]
+        i = first_index(st["hot_q"], "hot", s, "hot")
+        if i is not None: cand["hot"] = ("hot", i)
+    if not warm and cold_hours:
+        if st["cold_q"] and d["cold"] < int(s.get("limit_cold", 20)):
+            for sl in ("BIZ", "PARTNER", "cold"):
+                i = first_index(st["cold_q"], "cold", s, sl)
+                if i is not None: cand[sl] = ("cold", i)
+        if s.get("fu_on", True) and d["fu"] < int(s.get("limit_fu", 8)):
+            for u, e in st["sent"].items():
+                h = FOLLOWUP_HOT_H if e.get("kind") == "hot" else FOLLOWUP_COLD_H
+                age = now - e.get("ts", now)
+                if not e.get("replied") and not e.get("fu") and e.get("peer") and h * 3600 < age < 7 * 86400:
+                    cand["fu"] = ("fu", u, None); break
+            if "fu" not in cand:                 # касания на 3-й и 7-й день тем, кому назвали цену, а он молчит
+                for u, e in st["sent"].items():
+                    tm = touch_due(e, now)
+                    if tm: cand["fu"] = ("fu", u, tm); break
+    sl = next_slot(cand, st.get("last_kind"))
+    if not sl: return None
+    st["last_kind"] = sl
+    if sl == "fu":
+        _, u, tm = cand["fu"]
+        if tm: st["sent"][u]["_tm"] = tm
+        return ("fu", u)
+    kind, i = cand[sl]
+    q = st["hot_q"] if kind == "hot" else st["cold_q"]
+    if i: q.insert(0, q.pop(i))                  # отправка берёт q[0]
+    return (kind, q[0])
+
+def health_problems(st, s, now, mods, warm=False, limited=False):
+    """[(slot, причина)] — включённые боты, которые HEALTH_IDLE_H часов ничего не отправили. mods: {"BIZ": ошибка_импорта|""}.
+    Отсчёт идёт с момента, как бот замечен включённым (health[slot]["since"]), — первые сутки после запуска не тревожим."""
+    out, H = [], st.setdefault("health", {})
+    d = st.get("day") or {}
+    for sl in SLOTS:
+        if not s.get(SLOT_BOT[sl], True):
+            H.pop(sl, None); continue
+        h = H.setdefault(sl, {}); h.setdefault("since", now)
+        if mods.get(sl):
+            out.append((sl, f"модуль не загрузился: {mods[sl]}")); continue
+        if now - max(h.get("sent", 0), h["since"]) < HEALTH_IDLE_H * 3600: continue
+        if limited: why = "аккаунт на паузе после ограничения Telegram"
+        elif warm and sl != "hot": why = "мягкий режим после ограничения: холодные и дожимы ждут 3 дня"
+        elif sl == "fu": why = "нет молчунов, которым пора напомнить" if not st.get("sent") else f"лимит дожимов {s.get('limit_fu')} в день или некому напоминать"
+        else:
+            q = st.get("hot_q" if sl == "hot" else "cold_q") or []
+            n = len(q) if sl == "hot" else sum(1 for x in q if slot_of(x, "cold") == sl)
+            lim, used = (s.get("limit_hot"), d.get("hot", 0)) if sl == "hot" else (s.get("limit_cold"), d.get("cold", 0))
+            if not n: why = "поиск ничего не находит" + (f" (последняя находка {datetime.datetime.fromtimestamp(h['found']):%d.%m %H:%M})" if h.get("found") else " — ни одной находки")
+            elif used >= int(lim or 0): why = f"в очереди {n} писем, но дневной лимит ({lim}) исчерпан"
+            else: why = f"в очереди {n} писем, но они не уходят — смотри лог («НЕ ПИШУ», «сбой», «пропуск»)"
+        out.append((sl, why))
+    return out
+
 def S():
     """Настройки из settings.json (их меняет бот). Перечитываются, как только файл изменился."""
     try:
@@ -324,13 +411,15 @@ except Exception: mail_watch = None
 try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
     sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск бизнеса"))
     import bizhunt
+    BIZ_ERR = ""
 except Exception as _e:
-    bizhunt = None
+    bizhunt = None; BIZ_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"   # не молчим: сторож пришлёт это в Telegram
 try:                                     # бот 3: партнёры (SMM, таргетологи, агентства) — «Поиск партнёров\partners.py», в облаке рядом
     sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск партнёров"))
     import partners
+    PAR_ERR = ""
 except Exception as _e:
-    partners = None
+    partners = None; PAR_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"
 
 # Команда из двух аккаунтов (Егор и Саша) делит контакты пополам, чтобы один человек не получил два письма.
 # CONTACTS_PART = "0" или "1" (у Егора в облаке "0", у Саши "1"); пусто — пишем всем.
@@ -1194,7 +1283,7 @@ def main():
 
     def day():
         if st["day"].get("date") != today():          # итог дня присылает пульт в 21:00, тут только обнуляем
-            st["day"] = {"date": today(), "hot": 0, "cold": 0, "fu": 0}
+            st["day"] = {"date": today(), "hot": 0, "cold": 0, "fu": 0, "by": {}}
         return st["day"]
 
     tick_last = [0.0]
@@ -1590,37 +1679,7 @@ def main():
             lim_hot = min(int(s["limit_hot"]), WARM_HOT) if warm else int(s["limit_hot"])
             gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
-                # 16.11: раньше холодные (боты 2–3, эксперты) и дожимы шли ТОЛЬКО при пустой очереди вакансий —
-                # а она не пустеет никогда, и боты 2–3 не написали ни разу. Теперь по кругу: вакансия → холодное → дожим.
-                cand = {}
-                if (s["hot_on"] or s.get("biz_on", True)) and in_hours(HOURS_HOT) and d["hot"] < lim_hot:
-                    st["hot_q"] = [x for x in st["hot_q"] if now - x["found"] < 48 * 3600]
-                    it = pick_allowed(st["hot_q"], "hot", s)
-                    if it: cand["hot"] = ("hot", it)
-                if not warm and in_hours(HOURS_COLD):
-                    if st["cold_q"] and d["cold"] < int(s["limit_cold"]):
-                        it = pick_allowed(st["cold_q"], "cold", s)
-                        if it: cand["cold"] = ("cold", it)
-                    if s["fu_on"] and d["fu"] < int(s["limit_fu"]):   # дожимы и касания — свой лимит (16.11)
-                        for u, e in st["sent"].items():
-                            h = FOLLOWUP_HOT_H if e["kind"] == "hot" else FOLLOWUP_COLD_H
-                            age = now - e.get("ts", now)
-                            if not e.get("replied") and not e.get("fu") and e.get("peer") and h * 3600 < age < 7 * 86400:
-                                cand["fu"] = ("fu", u, None); break
-                        if "fu" not in cand:                           # касания на 3-й и 7-й день тем, кому назвали цену, а он молчит
-                            for u, e in st["sent"].items():
-                                tm = touch_due(e, now)
-                                if tm: cand["fu"] = ("fu", u, tm); break
-                job = None
-                order = ["hot", "cold", "fu"]
-                last = st.get("last_kind")
-                if last in order: order = order[order.index(last) + 1:] + order[:order.index(last) + 1]
-                for k in order:
-                    if k in cand: job = cand[k]; break
-                if job and job[0] == "fu":
-                    if job[2]: st["sent"][job[1]]["_tm"] = job[2]
-                    job = ("fu", job[1])
-                if job: st["last_kind"] = job[0]
+                job = plan_send(st, s, d, now, lim_hot, warm, in_hours(HOURS_HOT), in_hours(HOURS_COLD))   # по кругу между ботами
                 if not job: live(phase="жду", why=why_idle(s, d, limited), next_send=0)
                 else: live(phase=f"пишу @{job[1] if job[0] == 'fu' else job[1]['username']}")
 
@@ -1655,6 +1714,8 @@ def main():
                             if tm: e[tm] = "skip"
                         elif r == "sent":
                             add_out(e, getattr(web, "last_parts", 1) or 1); d["fu"] += 1; fails = 0
+                            d.setdefault("by", {})["fu"] = d.get("by", {}).get("fu", 0) + 1
+                            st.setdefault("health", {}).setdefault("fu", {})["sent"] = now
                             if tm: e[tm] = today(); e[tm + "_ts"] = time.time(); log(f"КАСАНИЕ {tm} отправлено: @{item}")
                             else: e["fu"] = today(); log(f"ДОЖИМ отправлен: @{item}")
                             next_send = time.time() + gap()
@@ -1693,6 +1754,9 @@ def main():
                         except Exception as ex: r, peer = "fail:" + str(ex).splitlines()[0][:100], None
                         if r == "sent":
                             q.pop(0); d[kind] += 1; fails = 0
+                            sl_ = slot_of(item, kind)                 # счёт по каждому боту + отметка для сторожа
+                            d.setdefault("by", {})[sl_] = d.get("by", {}).get(sl_, 0) + 1
+                            st.setdefault("health", {}).setdefault(sl_, {})["sent"] = now
                             st["text_hashes"] = (st.get("text_hashes", []) + [safety.text_hash(item["text"])])[-500:]
                             st["sent"][item["username"]] = {"kind": kind, "peer": peer, "ts": now, "date": today(),
                                 "display": item["display"], "variant": item.get("variant"),
@@ -1735,6 +1799,23 @@ def main():
             elif time.time() < next_send:
                 live(why="пауза между сообщениями", next_send=next_send)
 
+            # ---- 3a. сторож (16.11): включённый бот сутки без единой отправки — уведомление с причиной, раз в день на бота
+            if now - st.get("health_ts", 0) > 30 * 60:
+                st["health_ts"] = now
+                try:
+                    probs = health_problems(st, s, now, {"BIZ": "" if bizhunt else BIZ_ERR or "не найден",
+                                                         "PARTNER": "" if partners else PAR_ERR or "не найден"}, warm, limited)
+                    hn = st.setdefault("health_notified", {})
+                    fresh = [(sl_, w_) for sl_, w_ in probs if hn.get(sl_) != today()]
+                    if fresh:
+                        for sl_, _ in fresh: hn[sl_] = today()
+                        notify("🩺 Сторож ботов: за сутки ни одного письма от\n" +
+                               "\n".join(f"• {SLOT_NAME[sl_]} — {w_}" for sl_, w_ in fresh) +
+                               "\n\nОстальные боты работают. Выключить бота — 🤖 Боты.", silent=True)
+                    for sl_, w_ in probs: log(f"сторож: {SLOT_NAME[sl_]} — {w_}")
+                    save()
+                except Exception as ex: log("сторож: сбой", str(ex)[:100])
+
             # ---- 3b. бизнесы из «Поиск бизнеса\bizhunt.py» (hh.ru + 2ГИС) — готовые письма в общую холодную очередь
             st["cold_q"] = [x for x in st["cold_q"] if now - x.get("found", now) < 7 * 86400]   # письмо недельной давности уже не к месту
             nq = lambda v: sum(1 for x in st["cold_q"] + st["hot_q"] if x.get("variant") == v)   # у каждого бота свой потолок очереди
@@ -1748,6 +1829,7 @@ def main():
                         # контакт из текста вакансии («пишите в тг») = отклик на вакансию: лимит вакансий (40), а не холодных
                         (st["hot_q"] if item.get("invited") else st["cold_q"]).insert(0, item)
                         contacted.add(item["username"].lower())
+                        st.setdefault("health", {}).setdefault("BIZ", {})["found"] = now
                         log(f"бизнес в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
                 except Exception as e:
                     log("поиск бизнеса не удался:", str(e)[:120])
@@ -1762,6 +1844,7 @@ def main():
                     for item in partners.partner_step(st.setdefault("partners", {}), skip=skip, tg_search=tgs, parse=parse_channel):
                         st["cold_q"].insert(min(1, len(st["cold_q"])), item)      # вперемешку с бизнесами, а не за ними
                         contacted.add(item["username"].lower())
+                        st.setdefault("health", {}).setdefault("PARTNER", {})["found"] = now
                         log(f"партнёр в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
                 except Exception as e:
                     log("поиск партнёров не удался:", str(e)[:120])
@@ -1833,6 +1916,7 @@ def main():
                                         txt = human.humanize(re.sub(r"[^\n]*(https?://|t\.me/)\S*[^\n]*", "", txt))   # без ссылок незнакомому
                                         if human.looks_bot(txt): log("ИИ-письмо похоже на бота:", human.looks_bot(txt)); txt = None
                                     txt = txt or compose_cold(ch, dn, niche, v)
+                                    st.setdefault("health", {}).setdefault("cold", {})["found"] = now
                                     st["cold_q"].append({"username": u, "display": dn, "variant": v, "niche": niche, "uniq": 1,
                                                          "source": f"https://t.me/{name}",
                                                          "ctx": (f"Канал эксперта «{ch['title']}», {ch['subs']} подписчиков, средние просмотры {ch['avg_views']}, "
