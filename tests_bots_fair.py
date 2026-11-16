@@ -16,11 +16,12 @@ def check(name, cond):
 NOW = time.time()
 S = dict(c.DEFAULTS)
 
-def world(n_hot=200, n_biz=30, n_par=30, n_exp=30, silent=20):
+def world(n_hot=200, n_biz=30, n_par=30, n_exp=30, silent=20, n_nic=30):
     """Как в облаке: вакансий всегда больше, чем успеваем отправить, все очереди полны, есть молчуны для дожимов."""
     hot = [{"username": f"vac{i}", "found": NOW - 60, "text": "x"} for i in range(n_hot)]
     cold = ([{"username": f"biz{i}", "variant": "BIZ", "found": NOW} for i in range(n_biz)] +
             [{"username": f"par{i}", "variant": "PARTNER", "found": NOW} for i in range(n_par)] +
+            [{"username": f"nic{i}", "variant": "NICHE", "found": NOW} for i in range(n_nic)] +      # 17.11: бот 5 «Мастера»
             [{"username": f"exp{i}", "variant": "A", "found": NOW} for i in range(n_exp)])
     sent = {f"old{i}": {"kind": "hot", "ts": NOW - 30 * 3600, "peer": 1} for i in range(silent)}
     return {"hot_q": hot, "cold_q": cold, "sent": sent}
@@ -47,23 +48,23 @@ def run(st, s, ticks, d=None, warm=False, lim_hot=None):
 print("1. Главная осечка: очередь вакансий никогда не пустеет")
 got, seq, _ = run(world(), S, 20)
 check("за 20 отправок письмо получил каждый бот: вакансии, компании, партнёры, эксперты, дожимы",
-      all(got[k] > 0 for k in ("hot", "BIZ", "PARTNER", "cold", "fu")))
+      all(got[k] > 0 for k in ("hot", "BIZ", "PARTNER", "NICHE", "cold", "fu")))
 check("ни один бот не получает больше 2 отправок из 5 подряд (честный круг)",
       all(collections.Counter(seq[i:i + 5]).most_common(1)[0][1] <= 2 for i in range(0, 15)))
-check("первые 5 отправок — по одной от каждого бота", sorted(seq[:5]) == sorted(c.SLOTS))
+check("первые 6 отправок — по одной от каждого бота", sorted(seq[:6]) == sorted(c.SLOTS))
 
 print("2. Лимиты в день")
-s2 = dict(S, limit_hot=40, limit_cold=6, limit_fu=3)
+s2 = dict(S, limit_hot=40, limit_cold=8, limit_fu=3)
 got, seq, d = run(world(), s2, 200)
-check("холодных (2+3+эксперты) ровно limit_cold", d["cold"] == 6)
+check("холодных (2+3+5+эксперты) ровно limit_cold", d["cold"] == 8)
 check("дожимов ровно limit_fu", d["fu"] == 3)
-check("лимит холодных поделён между ботами 2, 3 и экспертами поровну", got["BIZ"] == got["PARTNER"] == got["cold"] == 2)
+check("лимит холодных поделён между ботами 2, 3, 5 и экспертами поровну", got["BIZ"] == got["PARTNER"] == got["NICHE"] == got["cold"] == 2)
 check("вакансии не превышают limit_hot", d["hot"] == 40)
 check("после исчерпания всех лимитов — ждём, а не шлём", seq[-1] is None)
-check("дожимы не съедают лимит новых писем (раньше был общий)", d["cold"] == 6 and d["fu"] == 3)
+check("дожимы не съедают лимит новых писем (раньше был общий)", d["cold"] == 8 and d["fu"] == 3)
 
 print("3. Выключатели ботов в пульте")
-for key, sl in (("biz_on", "BIZ"), ("partners_on", "PARTNER"), ("cold_on", "cold"), ("hot_on", "hot"), ("fu_on", "fu")):
+for key, sl in (("biz_on", "BIZ"), ("partners_on", "PARTNER"), ("niche_on", "NICHE"), ("cold_on", "cold"), ("hot_on", "hot"), ("fu_on", "fu")):
     got, _, _ = run(world(), dict(S, **{key: False}), 60)
     others = [k for k in c.SLOTS if k != sl]
     check(f"{key}=выкл: бот молчит, остальные пишут", got[sl] == 0 and all(got[k] > 0 for k in others))
