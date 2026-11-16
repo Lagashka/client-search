@@ -33,5 +33,8 @@ print("DIAG", json.dumps({
     "hh_api": {"token": bool((st.get("hh_api") or {}).get("access")), "dead": bool((st.get("hh_api") or {}).get("dead")),
                "applied": len(((st.get("hh_api") or {}).get("applied") or {}))},
     "mail": {"connected": bool((st.get("mail") or {}).get("init"))},
+    "last_kind": st.get("last_kind"),
+    "health_h_ago": {k: {f: round((datetime.datetime.now().timestamp() - v[f]) / 3600, 1) for f in ("sent", "found", "since") if v.get(f)}
+                     for k, v in (st.get("health") or {}).items()},
     "diag": re.sub(r"@\w+", "*", str(st.get("diag", "")))[:200]}, ensure_ascii=False))
 print("EVENTS", json.dumps(dict(ev.most_common(40)), ensure_ascii=False))
