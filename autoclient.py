@@ -282,6 +282,20 @@ def plan_send(st, s, d, now, lim_hot, warm, hot_hours=True, cold_hours=True):
     if i: q.insert(0, q.pop(i))                  # отправка берёт q[0]
     return (kind, q[0])
 
+def undone_leads(st, now, days=14):
+    """Тёплые без ответа: клиент ответил (не отказ), последнее сообщение в переписке — его, не старше days дней.
+    Свежее первым. Диалоги, где ты дописал сам (thread «me» после его ответа), не попадают."""
+    out = []
+    for u, e in (st.get("sent") or {}).items():
+        if not e.get("replied") or e.get("outcome") == "no" or e.get("crm") == "refused" or e.get("closed"): continue
+        th = [m for m in (e.get("thread") or []) if m.get("text") not in HOLD_TEXTS]   # «Секундочку» — не ответ
+        if not th or th[-1].get("who") != "them": continue
+        if e.get("human_ts", 0) > e.get("last_in_ts", 0): continue      # ты ответил сам после его последнего сообщения
+        ts = e.get("last_in_ts") or e.get("ts", now)
+        if now - ts > days * 86400: continue
+        out.append({"u": u, "display": e.get("display", ""), "last": th[-1].get("text", ""), "ts": ts, "days": int((now - ts) // 86400)})
+    return sorted(out, key=lambda r: -r["ts"])
+
 def health_problems(st, s, now, mods, warm=False, limited=False):
     """[(slot, причина)] — включённые боты, которые HEALTH_IDLE_H часов ничего не отправили. mods: {"BIZ": ошибка_импорта|""}.
     Отсчёт идёт с момента, как бот замечен включённым (health[slot]["since"]), — первые сутки после запуска не тревожим."""
@@ -1661,8 +1675,12 @@ def main():
                         e.setdefault("thread", []).append({"who": "me", "text": p["text"]})
                         crm.note_offer(e, p["text"])                  # цена названа / закрывающий вопрос задан (для касаний и CRM)
                         log(f"АВТООТВЕТ @{u} [{p.get('src') or 'прощание'}]: {p['text'][:80]}")
+                        if p.get("src") == "hold":             # 16.11: ты не ответил вовремя — громкое напоминание
+                            notify(f"⏰ {e.get('display', '')} (@{u}) ждёт твоего ответа — я написал «{p['text']}».\n"
+                                   "Ответь в ближайшие минуты: тёплый клиент остывает за час.",
+                                   buttons=[[{"text": "💬 Открыть чат", "url": f"https://t.me/{u}"}]])
                     elif rr.startswith("skip:ответил сам"):
-                        e["human"] = True                      # диалог взял Егор: бот в нём больше не пишет
+                        e["human"] = True; e["human_ts"] = time.time()                      # диалог взял Егор: бот в нём больше не пишет
                         log(f"автоответ @{u} отменён: в чате уже ответили сами")
                     else:
                         log(f"автоответ @{u} не ушёл: {rr}")
@@ -1726,7 +1744,7 @@ def main():
                             if tm: e[tm] = "skip"
                             else: e["fu"] = "skip"
                             log("дожим пропущен:", item, r)
-                            if "не одно наше" in r: e["human"] = True        # Егор дописал в чат сам: бот в нём больше не пишет
+                            if "не одно наше" in r: e["human"] = True; e["human_ts"] = time.time()        # Егор дописал в чат сам: бот в нём больше не пишет
                         save()
                     else:
                         q = st["hot_q"] if kind == "hot" else st["cold_q"]
@@ -1818,6 +1836,19 @@ def main():
                     for sl_, w_ in probs: log(f"сторож: {SLOT_NAME[sl_]} — {w_}")
                     save()
                 except Exception as ex: log("сторож: сбой", str(ex)[:100])
+
+            # ---- 3a2. утренняя сводка «Не дожаты» (16.11): ответили, а последнее слово за ними — раз в день после 10:00 МСК
+            if msk_now().hour >= 10 and st.get("undone_day") != today():
+                st["undone_day"] = today()
+                try:
+                    rows = undone_leads(st, now)
+                    if rows:
+                        notify(f"🔥 Не дожаты: {len(rows)} — ответили тебе, а ты им ещё нет\n\n" +
+                               "\n".join(f"• {r['display']} (@{r['u']}), {r['days']} дн. назад: «{r['last'][:90]}»" for r in rows[:10]) +
+                               "\n\nКаждому: его задача → цена → вопрос «да или нет».",
+                               buttons=[[{"text": f"💬 {r['display'][:24] or r['u']}", "url": f"https://t.me/{r['u']}"}] for r in rows[:6]])
+                    save()
+                except Exception as ex: log("сводка «не дожаты»: сбой", str(ex)[:100])
 
             # ---- 3b. бизнесы из «Поиск бизнеса\bizhunt.py» (hh.ru + 2ГИС) — готовые письма в общую холодную очередь
             st["cold_q"] = [x for x in st["cold_q"] if now - x.get("found", now) < 7 * 86400]   # письмо недельной давности уже не к месту
