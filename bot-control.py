@@ -248,6 +248,8 @@ def fmt_status(ctl):
     lines += [f"\nСегодня ({today[8:10]}.{today[5:7]}):" if today else "\nСегодня:",
               f"• откликов на вакансии: {d.get('hot', 0)} из {s['limit_hot']}",
               f"• холодных: {d.get('cold', 0)} из {s['limit_cold']}, дожимов: {d.get('fu', 0)} из {s['limit_fu']}",
+              "• по ботам: " + " · ".join(f"{n} {(d.get('by') or {}).get(k, 0)}" for k, n in
+                                          (("hot", "1️⃣"), ("BIZ", "2️⃣"), ("PARTNER", "3️⃣"), ("cold", "❄️"), ("fu", "🔁"))),
               f"• ответили: {len(rep_today)} (🔥 {sum(1 for e in rep_today if e.get('outcome') != 'no')}, "
               f"❌ {sum(1 for e in rep_today if e.get('outcome') == 'no')})",
               f"\nОчередь: вакансий {len(st.get('hot_q', []))}, холодных {len(st.get('cold_q', []))}",
