@@ -66,7 +66,7 @@ DEFAULT_CFG = {
 # ---------------------------------------------------------------- утилиты
 def log(*a):
     line = datetime.datetime.now().strftime("%d.%m %H:%M:%S ") + " ".join(str(x) for x in a)
-    print(line, flush=True)
+    if not os.environ.get("CLOUD"): print(line, flush=True)   # в облаке лог Actions публичный — ники и компании только в log.txt (кэш)
     try:
         with open(LOGF, "a", encoding="utf-8") as f: f.write(line + "\n")
     except Exception: pass
@@ -725,7 +725,8 @@ def collect(cfg, st):
                 if len(items) < 20: break
         st["hh_last"] = now
         log(f"hh.ru: найдено вакансий {len(new)}")
-    if cfg.get("gis_key") and now > st.get("gis_off_until", 0):
+    if cfg.get("gis_key") and now > st.get("gis_off_until", 0) and now - st.get("gis_ts", 0) > 75 * 60:   # демо-ключ: 1000 запросов/мес ≈ 30/день
+        st["gis_ts"] = now
         pairs = [(q, ct) for ct in cfg["cities"] for q in cfg["gis_queries"]]
         i = st.get("gis_i", 0) % len(pairs)
         q, ct = pairs[i]
