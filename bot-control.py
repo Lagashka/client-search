@@ -33,7 +33,7 @@ NO_WINDOW = 0x08000000
 REPORT_HOUR = 21          # итог дня — в 21:00 по времени компьютера
 WATCHDOG_MIN = 20         # нет признаков жизни столько минут — перезапуск поиска
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True,
-            "biz_on": True, "partners_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
+            "biz_on": True, "partners_on": True, "niche_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
 
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
 B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 Отправленные"
@@ -45,6 +45,7 @@ B_ALL = "🚀 Запустить все боты"
 BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на вакансии в Telegram-каналах"),
         ("biz_on", "2️⃣ Компании", "бизнесы с hh.ru и 2ГИС → личное сообщение"),
         ("partners_on", "3️⃣ Партнёры", "SMM-специалисты, таргетологи, агентства → партнёрство"),
+        ("niche_on", "5️⃣ Мастера", "владельцы каналов: стройка и ремонт, авто, премиум-ремесло → короткое письмо"),
         ("hhapi_on", "4️⃣ hh.ru", "сам откликается на вакансии hh.ru (20 в день) и следит за приглашениями"),
         ("mail_on", "📧 Почта", "видит письма клиентов и hh.ru, останавливает дожимы ответившим"),
         ("cold_on", "❄️ Эксперты", "холодные письма экспертам с каналами"),
@@ -249,7 +250,7 @@ def fmt_status(ctl):
               f"• откликов на вакансии: {d.get('hot', 0)} из {s['limit_hot']}",
               f"• холодных: {d.get('cold', 0)} из {s['limit_cold']}, дожимов: {d.get('fu', 0)} из {s['limit_fu']}",
               "• по ботам: " + " · ".join(f"{n} {(d.get('by') or {}).get(k, 0)}" for k, n in
-                                          (("hot", "1️⃣"), ("BIZ", "2️⃣"), ("PARTNER", "3️⃣"), ("cold", "❄️"), ("fu", "🔁"))),
+                                          (("hot", "1️⃣"), ("BIZ", "2️⃣"), ("PARTNER", "3️⃣"), ("NICHE", "5️⃣"), ("cold", "❄️"), ("fu", "🔁"))),
               f"• ответили: {len(rep_today)} (🔥 {sum(1 for e in rep_today if e.get('outcome') != 'no')}, "
               f"❌ {sum(1 for e in rep_today if e.get('outcome') == 'no')})",
               f"\nОчередь: вакансий {len(st.get('hot_q', []))}, холодных {len(st.get('cold_q', []))}",
