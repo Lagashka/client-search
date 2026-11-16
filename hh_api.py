@@ -20,7 +20,7 @@ import os, re, json, time, random, datetime, html, urllib.request, urllib.parse,
 API = "https://api.hh.ru"
 LIMIT = 20
 GAP = (180, 480)
-HOURS = (9, 21)
+HOURS = (0, 24)            # 16.11 Егор: круглосуточно, с паузами GAP и дневным лимитом
 QUERIES = ["рилсмейкер", "монтажер reels", "видеомонтажер", "мобилограф", "монтажер видео", "монтажер shorts",
            "моушн-дизайнер", "видеомонтаж удаленно", "монтажер роликов", "контент-мейкер видео"]
 ROLE = re.compile(r"монтаж|рилс|reels|shorts|мобилограф|моушн|motion|видео|video|контент-?мейкер|ugc", re.I)
