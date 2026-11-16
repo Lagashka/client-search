@@ -74,6 +74,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}          # порядок моделей Groq (переменная репозитория); пусто — по умолчанию
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GIS_KEY: ${{ secrets.GIS_KEY }}             # 2ГИС Catalog API — поиск компаний по нишам и городам (bizhunt)
@@ -102,7 +103,9 @@ jobs:
         continue-on-error: true
         env:
           PYTHONIOENCODING: utf-8
-        run: python crm.py stats state.json | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          python crm.py stats state.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python diag.py || true
 
       - name: Save state
         if: always() && steps.gate.outputs.go == 'true'
