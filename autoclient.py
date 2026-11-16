@@ -198,7 +198,7 @@ def jsave(p, data):
     with open(tmp, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, p)
 
-DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True,
+DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True,   # 16.11: дожимы — свой лимит, не съедают новые письма
             "biz_on": True, "partners_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
 _SC = {"m": None, "v": dict(DEFAULTS)}
 
@@ -1107,7 +1107,7 @@ def write_status(st, d, limited):
     txt = (f"# Статус поиска клиентов\n\nОбновлено: {datetime.datetime.now():%d.%m %H:%M}"
            f"{'  ⛔ отправка на паузе до ' + st['limited_until'][:16] if limited else ''}\n\n"
            f"**Сегодня:** откликов на вакансии {d['hot']}/{S()['limit_hot']}, холодных {d['cold']}, дожимов {d['fu']} "
-           f"(лимит холодных+дожимов {S()['limit_cold']})\n\n"
+           f"(лимиты: холодных {S()['limit_cold']}, дожимов {S()['limit_fu']})\n\n"
            f"**В очереди:** вакансий {len(st['hot_q'])}, холодных {len(st['cold_q'])}\n\n"
            f"## Кто отвечает\n| тип | отправлено | ответили | % |\n|---|---|---|---|\n{rows}\n\n"
            f"## Ответили ({len(replies)})\n" + "\n".join(replies[-30:]) + "\n")
@@ -1257,7 +1257,8 @@ def main():
         elif not st["hot_q"]: parts.append("вакансии: жду новые")
         if not (s["cold_on"] or s["fu_on"]): parts.append("холодные выключены")
         elif not in_hours(HOURS_COLD): parts.append(f"холодные: с {HOURS_COLD[0]}:00 до {HOURS_COLD[1]}:00 МСК")
-        elif d["cold"] + d["fu"] >= s["limit_cold"]: parts.append("холодные: дневной лимит исчерпан")
+        elif d["cold"] >= int(s["limit_cold"]) and (not s["fu_on"] or d["fu"] >= int(s["limit_fu"])):
+            parts.append("холодные и дожимы: дневной лимит исчерпан")
         elif not st["cold_q"]: parts.append("холодные: подбираю экспертов")
         return "; ".join(parts) or "готов отправлять"
 
@@ -1594,8 +1595,8 @@ def main():
                     st["hot_q"] = [x for x in st["hot_q"] if now - x["found"] < 48 * 3600]
                     it = pick_allowed(st["hot_q"], "hot", s)
                     if it: job = ("hot", it)
-                if not job and not warm and in_hours(HOURS_COLD) and d["cold"] + d["fu"] < s["limit_cold"]:
-                    if s["fu_on"]:
+                if not job and not warm and in_hours(HOURS_COLD):
+                    if s["fu_on"] and d["fu"] < int(s["limit_fu"]):   # дожимы и касания — свой лимит (16.11)
                         for u, e in st["sent"].items():
                             h = FOLLOWUP_HOT_H if e["kind"] == "hot" else FOLLOWUP_COLD_H
                             age = now - e.get("ts", now)
@@ -1605,7 +1606,7 @@ def main():
                             for u, e in st["sent"].items():
                                 tm = touch_due(e, now)
                                 if tm: e["_tm"] = tm; job = ("fu", u); break
-                    if not job and st["cold_q"]:
+                    if not job and st["cold_q"] and d["cold"] < int(s["limit_cold"]):
                         it = pick_allowed(st["cold_q"], "cold", s)
                         if it: job = ("cold", it)
                 if not job: live(phase="жду", why=why_idle(s, d, limited), next_send=0)
@@ -1688,7 +1689,7 @@ def main():
                                 "n_out": getattr(web, "last_parts", 1) or 1}
                             crm_sync()
                             log(f"ОТПРАВЛЕНО [{'вакансия' if kind == 'hot' else 'холодное'}] @{item['username']} — сегодня: "
-                                f"вакансии {d['hot']}/{s['limit_hot']}, холодные+дожимы {d['cold'] + d['fu']}/{s['limit_cold']}")
+                                f"вакансии {d['hot']}/{s['limit_hot']}, холодные {d['cold']}/{s['limit_cold']}, дожимы {d['fu']}/{s['limit_fu']}")
                             next_send = time.time() + gap()
                             st["burst"] = st.get("burst", 0) + 1
                             if st["burst"] >= st.setdefault("burst_max", random.randint(*REST_EVERY)):   # перерыв, как у человека
@@ -1853,11 +1854,11 @@ def main():
             if "SpamBot" in str(e) or re.search(r"к сожалению|ограничен|limited", txt, re.I):
                 s = S()
                 safe = dict(s, gap=max(int(s["gap"]), 180), limit_hot=min(int(s["limit_hot"]), 25),
-                            limit_cold=min(int(s["limit_cold"]), 10))
+                            limit_cold=min(int(s["limit_cold"]), 10), limit_fu=min(int(s["limit_fu"]), 5))
                 if safe != s:
                     jsave(SETTINGS, safe)
                     msg += (f"\n\n🛡 Включил безопасный режим: пауза {safe['gap']} с, лимиты {safe['limit_hot']}/"
-                            f"{safe['limit_cold']} в день. Повторное ограничение обычно дольше, а потом — навсегда. "
+                            f"{safe['limit_cold']}, дожимов {safe['limit_fu']} в день. Повторное ограничение обычно дольше, а потом — навсегда. "
                             "Вернуть быстрее можно в ⚙️ Настройках.")
                 if txt: msg += f"\n\n@SpamBot пишет: «{cut(txt, 600)}»"
             notify(msg)
