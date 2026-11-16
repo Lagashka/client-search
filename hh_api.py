@@ -21,9 +21,11 @@ API = "https://api.hh.ru"
 LIMIT = 20
 GAP = (180, 480)
 HOURS = (0, 24)            # 16.11 Егор: круглосуточно, с паузами GAP и дневным лимитом
-QUERIES = ["рилсмейкер", "монтажер reels", "видеомонтажер", "мобилограф", "монтажер видео", "монтажер shorts",
+QUERIES = ["рилсмейкер", "монтажер reels", "видеомонтажер", "монтажер видео", "монтажер shorts",   # 16.11: без «мобилограф» — это съёмка
            "моушн-дизайнер", "видеомонтаж удаленно", "монтажер роликов", "контент-мейкер видео"]
-ROLE = re.compile(r"монтаж|рилс|reels|shorts|мобилограф|моушн|motion|видео|video|контент-?мейкер|ugc", re.I)
+ROLE = re.compile(r"монтаж|рилс|reels|shorts|моушн|motion|видео|video|контент-?мейкер", re.I)
+try: from safety import shoot_job
+except ImportError: shoot_job = lambda t: False
 SKIP = re.compile(r"офис|оператор|фотограф\b|водител|продав|курьер|модел|стажер|стажёр|преподават|учител|наставник|инженер|"
                   r"видеонаблюд|монтажник|электромонт|сборщик|сантех", re.I)
 PORTFOLIO = "https://t.me/zakulisy715"
@@ -92,7 +94,7 @@ def search(st):
                                                                       "order_by": "publication_time", "area": 113}), st)   # без входа hh отвечает 403
         for v in (j or {}).get("items") or []:
             name = v.get("name", "")
-            if not ROLE.search(name) or SKIP.search(name): continue
+            if not ROLE.search(name) or SKIP.search(name) or shoot_job(name): continue
             if v.get("has_test") or v.get("archived") or v.get("response_url"): continue    # тест / отклик на чужом сайте
             out.setdefault(str(v["id"]), {"id": str(v["id"]), "name": name, "employer": (v.get("employer") or {}).get("name", ""),
                                           "employer_id": str((v.get("employer") or {}).get("id") or ""), "url": v.get("alternate_url", "")})
@@ -157,6 +159,7 @@ def step(st, notify, log, s=None):
         if (full.get("relations") or []): applied[v["id"]] = {"skip": "уже откликались", "employer_id": v["employer_id"]}; continue
         desc = text_of(full.get("description"))
         if SKIP.search(desc[:400]) and not ROLE.search(desc[:400]): applied[v["id"]] = {"skip": "не наш профиль"}; continue
+        if shoot_job(v.get("name", "") + "\n" + desc): applied[v["id"]] = {"skip": "нужна съёмка"}; continue
         try:
             import guard
             if guard.no_dm(desc) and re.search(r"не (пишите|откликайтесь) без|только с тестов", desc, re.I):
