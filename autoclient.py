@@ -1590,25 +1590,37 @@ def main():
             lim_hot = min(int(s["limit_hot"]), WARM_HOT) if warm else int(s["limit_hot"])
             gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
-                job = None
+                # 16.11: раньше холодные (боты 2–3, эксперты) и дожимы шли ТОЛЬКО при пустой очереди вакансий —
+                # а она не пустеет никогда, и боты 2–3 не написали ни разу. Теперь по кругу: вакансия → холодное → дожим.
+                cand = {}
                 if (s["hot_on"] or s.get("biz_on", True)) and in_hours(HOURS_HOT) and d["hot"] < lim_hot:
                     st["hot_q"] = [x for x in st["hot_q"] if now - x["found"] < 48 * 3600]
                     it = pick_allowed(st["hot_q"], "hot", s)
-                    if it: job = ("hot", it)
-                if not job and not warm and in_hours(HOURS_COLD):
+                    if it: cand["hot"] = ("hot", it)
+                if not warm and in_hours(HOURS_COLD):
+                    if st["cold_q"] and d["cold"] < int(s["limit_cold"]):
+                        it = pick_allowed(st["cold_q"], "cold", s)
+                        if it: cand["cold"] = ("cold", it)
                     if s["fu_on"] and d["fu"] < int(s["limit_fu"]):   # дожимы и касания — свой лимит (16.11)
                         for u, e in st["sent"].items():
                             h = FOLLOWUP_HOT_H if e["kind"] == "hot" else FOLLOWUP_COLD_H
                             age = now - e.get("ts", now)
                             if not e.get("replied") and not e.get("fu") and e.get("peer") and h * 3600 < age < 7 * 86400:
-                                job = ("fu", u); break
-                        if not job:                                    # касания на 3-й и 7-й день тем, кому назвали цену, а он молчит
+                                cand["fu"] = ("fu", u, None); break
+                        if "fu" not in cand:                           # касания на 3-й и 7-й день тем, кому назвали цену, а он молчит
                             for u, e in st["sent"].items():
                                 tm = touch_due(e, now)
-                                if tm: e["_tm"] = tm; job = ("fu", u); break
-                    if not job and st["cold_q"] and d["cold"] < int(s["limit_cold"]):
-                        it = pick_allowed(st["cold_q"], "cold", s)
-                        if it: job = ("cold", it)
+                                if tm: cand["fu"] = ("fu", u, tm); break
+                job = None
+                order = ["hot", "cold", "fu"]
+                last = st.get("last_kind")
+                if last in order: order = order[order.index(last) + 1:] + order[:order.index(last) + 1]
+                for k in order:
+                    if k in cand: job = cand[k]; break
+                if job and job[0] == "fu":
+                    if job[2]: st["sent"][job[1]]["_tm"] = job[2]
+                    job = ("fu", job[1])
+                if job: st["last_kind"] = job[0]
                 if not job: live(phase="жду", why=why_idle(s, d, limited), next_send=0)
                 else: live(phase=f"пишу @{job[1] if job[0] == 'fu' else job[1]['username']}")
 
