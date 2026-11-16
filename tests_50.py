@@ -62,7 +62,8 @@ check("№23 все выключены — ничего не шлём", c.pick_a
 
 print("дожимы")
 check("№24 дожим компании — без «вашего канала»", "канал" not in c.followup_text({"kind": "cold", "variant": "BIZ", "display": "Ольга"}))
-check("№25 дожим партнёру — про партнёрство", "партн" in c.followup_text({"kind": "cold", "variant": "PARTNER", "display": ""}) or "клиент" in c.followup_text({"kind": "cold", "variant": "PARTNER", "display": ""}))
+_t25 = c.followup_text({"kind": "cold", "variant": "PARTNER", "display": ""})
+check("№25 дожим партнёру — про партнёрство", "партн" in _t25 or "клиент" in _t25 or print("     текст:", repr(_t25)))
 
 print("бот 3: партнёры")
 check("№26 резюме монтажёра — конкурент, не партнёр", bool(P.COMPETITOR.search("#резюме Я видеомонтажёр и рилсмейкер")))
