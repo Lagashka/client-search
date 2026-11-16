@@ -32,7 +32,7 @@ PY = sys.executable.replace("pythonw.exe", "python.exe")
 NO_WINDOW = 0x08000000
 REPORT_HOUR = 21          # итог дня — в 21:00 по времени компьютера
 WATCHDOG_MIN = 20         # нет признаков жизни столько минут — перезапуск поиска
-DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True,
+DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True,
             "biz_on": True, "partners_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
 
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
@@ -247,7 +247,7 @@ def fmt_status(ctl):
         lines.append(f"⛔ Отправка на паузе до {lim[11:16]} {lim[8:10]}.{lim[5:7]} (защита аккаунта), поиск идёт")
     lines += [f"\nСегодня ({today[8:10]}.{today[5:7]}):" if today else "\nСегодня:",
               f"• откликов на вакансии: {d.get('hot', 0)} из {s['limit_hot']}",
-              f"• холодных: {d.get('cold', 0)}, дожимов: {d.get('fu', 0)} (лимит {s['limit_cold']})",
+              f"• холодных: {d.get('cold', 0)} из {s['limit_cold']}, дожимов: {d.get('fu', 0)} из {s['limit_fu']}",
               f"• ответили: {len(rep_today)} (🔥 {sum(1 for e in rep_today if e.get('outcome') != 'no')}, "
               f"❌ {sum(1 for e in rep_today if e.get('outcome') == 'no')})",
               f"\nОчередь: вакансий {len(st.get('hot_q', []))}, холодных {len(st.get('cold_q', []))}",
@@ -295,7 +295,7 @@ def render(what, ctl):
     if what == "log": return fmt_log() + stamp(), refresh_kb("log")
     return "?", None
 
-GAPS, HOTS, COLDS = [30, 60, 90, 180, 300], [25, 40, 60, 100], [0, 10, 20, 40]
+GAPS, HOTS, COLDS, FUS = [30, 60, 90, 180, 300], [25, 40, 60, 100], [0, 10, 20, 40], [0, 5, 8, 15]
 
 def render_settings():
     s = settings()
@@ -304,7 +304,8 @@ def render_settings():
     text = ("⚙️ Настройки — меняются сразу, без перезапуска\n\n"
             f"⏱ Пауза между сообщениями: {s['gap']} с\n"
             f"📈 Откликов на вакансии в день: {s['limit_hot']}\n"
-            f"❄️ Холодных + дожимов в день: {s['limit_cold']}\n"
+            f"❄️ Новых холодных (эксперты, компании, партнёры) в день: {s['limit_cold']}\n"
+            f"🔁 Дожимов и касаний в день: {s['limit_fu']}\n"
             f"Вакансии {onoff('hot_on')} · Холодные {onoff('cold_on')} · Дожимы {onoff('fu_on')}\n\n"
             "⚠️ Чем чаще и больше сообщений незнакомым, тем выше риск, что Telegram ограничит аккаунт.")
     kb = [[{"text": "⏱ пауза, сек:", "callback_data": "noop"}],
@@ -313,6 +314,8 @@ def render_settings():
           [{"text": mark(s["limit_hot"], v), "callback_data": f"set:limit_hot:{v}"} for v in HOTS],
           [{"text": "❄️ холодных в день:", "callback_data": "noop"}],
           [{"text": mark(s["limit_cold"], v), "callback_data": f"set:limit_cold:{v}"} for v in COLDS],
+          [{"text": "🔁 дожимов в день:", "callback_data": "noop"}],
+          [{"text": mark(s["limit_fu"], v), "callback_data": f"set:limit_fu:{v}"} for v in FUS],
           [{"text": f"Вакансии {onoff('hot_on')}", "callback_data": "tog:hot_on"},
            {"text": f"Холодные {onoff('cold_on')}", "callback_data": "tog:cold_on"},
            {"text": f"Дожимы {onoff('fu_on')}", "callback_data": "tog:fu_on"}],
@@ -324,7 +327,7 @@ def render_bots():
     s = settings()
     lines = [f"{'🟢' if s.get(k, True) else '⚪️'} {name} — {about}" for k, name, about in BOTS]
     text = ("🤖 Боты — нажми, чтобы включить или выключить. Действует сразу, в облаке.\n\n" + "\n".join(lines) +
-            f"\n\nЛимиты в день: вакансии {s['limit_hot']}, компании+партнёры+эксперты+дожимы {s['limit_cold']} (меняются в ⚙️ Настройки).\n"
+            f"\n\nЛимиты в день: вакансии {s['limit_hot']}, компании+партнёры+эксперты {s['limit_cold']}, дожимы {s['limit_fu']} (меняются в ⚙️ Настройки).\n"
             "На ответ клиента бот пишет только «Секундочку, сейчас вернусь», дальше ведёшь ты.")
     kb = [[{"text": f"{name} {'✅' if s.get(k, True) else '❌'}", "callback_data": f"bot:{k}"}] for k, name, _ in BOTS]
     kb.append([{"text": "✅ Включить все", "callback_data": "bot:all_on"}, {"text": "⏸ Выключить все", "callback_data": "bot:all_off"}])
