@@ -161,6 +161,10 @@ def rule_fit(text):
     low = BOILER.sub("", text.lower()).strip()
     head = low[:250]
     if SELF_AD.search(low): return False, "это реклама монтажёра, а не вакансия"
+    try:
+        import safety
+        if safety.shoot_job(low): return False, "нужна съёмка (оператор/видеограф/мобилограф), Егор не снимает"
+    except ImportError: pass
     for rx, why in NOFIT:
         if re.search(rx, low) and not re.search(r"монтаж\w* (видео|роликов|reels|рилс)|видеомонтаж", head):
             return False, why
