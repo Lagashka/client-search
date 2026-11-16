@@ -26,7 +26,7 @@ day = st.get("day", {})
 print("DIAG", json.dumps({
     "today": day, "limited_until": st.get("limited_until") or "", "warm_from": st.get("warm_from") or "",
     "hot_q": dict(q), "cold_q": dict(cq),
-    "settings": {k: s.get(k) for k in ("hot_on", "cold_on", "fu_on", "biz_on", "partners_on", "hhapi_on", "mail_on", "limit_hot", "limit_cold", "limit_fu", "gap", "hold_only")},
+    "settings": {k: s.get(k) for k in ("hot_on", "cold_on", "fu_on", "biz_on", "partners_on", "niche_on", "hhapi_on", "mail_on", "limit_hot", "limit_cold", "limit_fu", "gap", "hold_only")},
     "want": jl("bot-control.json", {}).get("want"),
     "biz_companies": dict(collections.Counter(c.get("status") for c in ((st.get("biz") or {}).get("companies") or {}).values())),
     "partners": {k: len((st.get("partners") or {}).get(k) or []) for k in ("frontier", "boards", "pending", "seen")},
