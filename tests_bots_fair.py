@@ -148,7 +148,18 @@ import bizhunt
 check("бот 2: нет запросов «мобилограф»/«видеограф», вакансия видеографа отсеивается",
       not any(q in ("мобилограф", "видеограф") for q in bizhunt.DEFAULT_CFG["hh_queries"]) and bizhunt.shoot_job("Видеограф в салон"))
 
-print("8. Защита от возврата старой ошибки")
+print("8. Сводка «Не дожаты»")
+sent = {"a": {"replied": "x", "thread": [{"who": "me", "text": "1"}, {"who": "them", "text": "интересно, сколько?"}], "last_in_ts": NOW - 3600, "display": "Аня"},
+        "b": {"replied": "x", "thread": [{"who": "them", "text": "нет"}], "last_in_ts": NOW - 3600, "crm": "refused"},
+        "c": {"replied": "x", "thread": [{"who": "them", "text": "да"}], "last_in_ts": NOW - 7200, "human": True, "human_ts": NOW - 60},
+        "d": {"replied": "x", "thread": [{"who": "them", "text": "давно"}], "last_in_ts": NOW - 20 * 86400},
+        "e": {"replied": "x", "thread": [{"who": "them", "text": "ок"}, {"who": "me", "text": c.HOLD_TEXTS[0]}], "last_in_ts": NOW - 100},
+        "f": {"replied": "x", "thread": [{"who": "them", "text": "сколько?"}, {"who": "me", "text": "5 000 ₽, начинаем?"}], "last_in_ts": NOW - 500}}
+rows = c.undone_leads({"sent": sent}, NOW)
+check("в сводке те, кому ты не ответил; «Секундочку» ответом не считается; отказ, старые и отвеченные — нет",
+      [r["u"] for r in rows] == ["e", "a"])
+
+print("9. Защита от возврата старой ошибки")
 src = open(os.path.join(HERE, "autoclient.py"), encoding="utf-8").read()
 check("основной цикл выбирает письмо через plan_send", "job = plan_send(" in src)
 check("в цикле нет старого «холодные только если нет вакансий»", "if not job and not warm and in_hours(HOURS_COLD)" not in src)
