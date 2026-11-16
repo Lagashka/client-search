@@ -200,8 +200,8 @@ def jsave(p, data):
     os.replace(tmp, p)
 
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True,   # 16.11: дожимы — свой лимит, не съедают новые письма
-            "biz_on": True, "partners_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
-_SC = {"m": None, "v": dict(DEFAULTS)}
+            "biz_on": True, "partners_on": True, "niche_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
+_SC ={"m": None, "v": dict(DEFAULTS)}
 
 def bot_key(item, kind):
     """Какой из трёх ботов (кнопка пульта) отвечает за письмо: 1 вакансии (hot_on), 2 компании (biz_on), 3 партнёры (partners_on);
@@ -209,6 +209,7 @@ def bot_key(item, kind):
     v = item.get("variant")
     if v == "BIZ": return "biz_on"
     if v == "PARTNER": return "partners_on"
+    if v == "NICHE": return "niche_on"
     return "hot_on" if kind == "hot" else "cold_on"
 
 def pick_allowed(q, kind, s):
@@ -221,16 +222,16 @@ def pick_allowed(q, kind, s):
 
 # ---- 16.11: честная очередь между ботами. Раньше холодные (боты 2–3, эксперты) шли только при пустой очереди
 # вакансий — она не пустеет никогда, и боты 2–3 не написали ни одного письма. Теперь отправка идёт по кругу.
-SLOTS = ("hot", "BIZ", "PARTNER", "cold", "fu")          # порядок круга: каждый бот получает свою очередь
-SLOT_BOT = {"hot": "hot_on", "BIZ": "biz_on", "PARTNER": "partners_on", "cold": "cold_on", "fu": "fu_on"}
-SLOT_NAME = {"hot": "1️⃣ Вакансии", "BIZ": "2️⃣ Компании", "PARTNER": "3️⃣ Партнёры", "cold": "❄️ Эксперты", "fu": "🔁 Дожимы"}
+SLOTS = ("hot", "BIZ", "PARTNER", "NICHE", "cold", "fu")          # порядок круга: каждый бот получает свою очередь
+SLOT_BOT = {"hot": "hot_on", "BIZ": "biz_on", "PARTNER": "partners_on", "NICHE": "niche_on", "cold": "cold_on", "fu": "fu_on"}
+SLOT_NAME = {"hot": "1️⃣ Вакансии", "BIZ": "2️⃣ Компании", "PARTNER": "3️⃣ Партнёры", "NICHE": "5️⃣ Мастера", "cold": "❄️ Эксперты", "fu": "🔁 Дожимы"}
 HEALTH_IDLE_H = 24        # включённый бот столько часов без единой отправки — уведомление с причиной
 
 def slot_of(item, kind):
     """Из какого бота письмо: вакансии (вся очередь hot_q), 2 компании, 3 партнёры, эксперты."""
     if kind == "hot": return "hot"
     v = item.get("variant")
-    return v if v in ("BIZ", "PARTNER") else "cold"
+    return v if v in ("BIZ", "PARTNER", "NICHE") else "cold"
 
 def first_index(q, kind, s, slot):
     """Индекс первого письма нужного бота (бот включён), или None. Очередь не трогает."""
@@ -257,7 +258,7 @@ def plan_send(st, s, d, now, lim_hot, warm, hot_hours=True, cold_hours=True):
         if i is not None: cand["hot"] = ("hot", i)
     if not warm and cold_hours:
         if st["cold_q"] and d["cold"] < int(s.get("limit_cold", 20)):
-            for sl in ("BIZ", "PARTNER", "cold"):
+            for sl in ("BIZ", "PARTNER", "NICHE", "cold"):
                 i = first_index(st["cold_q"], "cold", s, sl)
                 if i is not None: cand[sl] = ("cold", i)
         if s.get("fu_on", True) and d["fu"] < int(s.get("limit_fu", 8)):
@@ -436,6 +437,12 @@ try:                                     # бот 3: партнёры (SMM, та
     PAR_ERR = ""
 except Exception as _e:
     partners = None; PAR_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"
+try:                                     # бот 5: мастера (стройка/ремонт, авто, премиум-ремесло) — «Поиск мастеров\niches.py», в облаке рядом
+    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск мастеров"))
+    import niches
+    NIC_ERR = ""
+except Exception as _e:
+    niches = None; NIC_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"
 
 # Команда из двух аккаунтов (Егор и Саша) делит контакты пополам, чтобы один человек не получил два письма.
 # CONTACTS_PART = "0" или "1" (у Егора в облаке "0", у Саши "1"); пусто — пишем всем.
@@ -1328,7 +1335,7 @@ def main():
     def why_idle(s, d, limited):
         if limited: return f"⛔ пауза до {st['limited_until'][11:16]} (защита аккаунта)"
         parts = []
-        off = [n for k, n in (("hot_on", "1 вакансии"), ("biz_on", "2 компании"), ("partners_on", "3 партнёры")) if not s.get(k, True)]
+        off = [n for k, n in (("hot_on", "1 вакансии"), ("biz_on", "2 компании"), ("partners_on", "3 партнёры"), ("niche_on", "5 мастера")) if not s.get(k, True)]
         if off: parts.append("выключены боты: " + ", ".join(off))
         if not s["hot_on"]: pass
         elif not in_hours(HOURS_HOT): parts.append(f"вакансии: ночь, продолжу в {HOURS_HOT[0]}:00 МСК")
@@ -1805,7 +1812,8 @@ def main():
                 st["health_ts"] = now
                 try:
                     probs = health_problems(st, s, now, {"BIZ": "" if bizhunt else BIZ_ERR or "не найден",
-                                                         "PARTNER": "" if partners else PAR_ERR or "не найден"}, warm, limited)
+                                                         "PARTNER": "" if partners else PAR_ERR or "не найден",
+                                                         "NICHE": "" if niches else NIC_ERR or "не найден"}, warm, limited)
                     hn = st.setdefault("health_notified", {})
                     fresh = [(sl_, w_) for sl_, w_ in probs if hn.get(sl_) != today()]
                     if fresh:
@@ -1863,6 +1871,27 @@ def main():
                 except Exception as e:
                     log("поиск партнёров не удался:", str(e)[:120])
                 save()
+            # ---- 3c-bis. бот 5 «мастера»: стройка/ремонт, авто, премиум-ремесло → короткое письмо под нишу (17.11)
+            if s.get("niche_on", True) and niches and now - st.get("niches_ts", 0) > 15 * 60 and nq("NICHE") < 15:
+                st["niches_ts"] = now
+                live(phase="ищу мастеров (стройка, авто, ремесло)")
+                try:
+                    skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u)
+                    def _nsearch(q):
+                        f = set()
+                        if web:
+                            try: f |= web.search_channels(q)
+                            except Exception as e: log("поиск мастеров в Telegram не удался:", str(e)[:80])
+                        if len(f) < 3: f |= search_engines(q)
+                        return f
+                    for item in niches.niche_step(st.setdefault("niches", {}), skip=skip, tg_search=_nsearch, parse=parse_channel):
+                        st["cold_q"].insert(min(1, len(st["cold_q"])), item)
+                        contacted.add(item["username"].lower())
+                        st.setdefault("health", {}).setdefault("NICHE", {})["found"] = now
+                        log(f"мастер в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
+                except Exception as e:
+                    log("поиск мастеров не удался:", str(e)[:120])
+                save()
             # ---- 3d. почта (раз в 10 мин) и бот 4 — hh.ru через API (отклики + ответы работодателей)
             if mail_watch and s.get("mail_on", True) and mail_watch.configured():
                 try: mail_watch.step(st, notify, log, crm)
@@ -1887,7 +1916,7 @@ def main():
                     log("biz_tg.json не прочитан:", str(e)[:80])
 
             # ---- 4. поиск холодных — в паузах между отправками
-            if s["cold_on"] and sum(1 for x in st["cold_q"] if x.get("variant") not in ("BIZ", "PARTNER")) < 30:
+            if s["cold_on"] and sum(1 for x in st["cold_q"] if x.get("variant") not in ("BIZ", "PARTNER", "NICHE")) < 30:
                 if not frontier:
                     if not st.get("seeded"):
                         frontier.extend(s for s in SEEDS if s.lower() not in seen); st["seeded"] = True
