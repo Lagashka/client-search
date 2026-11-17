@@ -42,6 +42,13 @@ class BotLink:
                 self.bc.say(*self.bc.render_bots())
             except Exception: pass
 
+        if not self.ctl.cfg.get("pult_v4"):                    # 17.11: новый пульт — показать один раз (с новой клавиатурой)
+            self.ctl.cfg["pult_v4"] = True; self.ctl.save()
+            try:
+                self.bc.say("🆕 Пульт стал проще: 5 кнопок внизу.\n\n" + self.bc.HELP)
+                self.bc.say(*self.bc.render("home", self.ctl))
+            except Exception: pass
+
     def want(self):
         return self.ctl.running()
 
