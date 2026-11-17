@@ -33,7 +33,8 @@ NO_WINDOW = 0x08000000
 REPORT_HOUR = 21          # итог дня — в 21:00 по времени компьютера
 WATCHDOG_MIN = 20         # нет признаков жизни столько минут — перезапуск поиска
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True,
-            "biz_on": True, "partners_on": True, "niche_on": True, "yt_on": True, "limit_yt": 20, "mail_on": True}
+            "biz_on": True, "partners_on": True, "niche_on": True, "yt_on": True, "limit_yt": 20, "mail_on": True,
+            "yt_manual": True, "yt_mail_on": False, "limit_ytm": 10}
 
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
 B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 Отправленные"
@@ -50,6 +51,9 @@ BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на ваканс
         ("yt_on", "5️⃣ YouTube", "эксперты с живыми YouTube-каналами → письмо в Telegram (только у кого он есть)"),
         ("mail_on", "📧 Почта", "видит письма клиентов, останавливает дожимы ответившим"),
         ("fu_on", "🔁 Дожимы", "одно напоминание тем, кто молчит")]
+# настройки бота 5 — не боты, кнопки «включить/выключить все» их не трогают
+YT_OPTS = [("yt_manual", "5️⃣ ✋ Ручной режим", "каждое письмо YouTube сначала тебе: ✅ Отправить / ❌ Пропустить"),
+           ("yt_mail_on", "5️⃣ 📧 На почту", "эксперту без Telegram — письмо на почту с твоего адреса (до 10 в день)")]
 KEYBOARD = {"keyboard": [[{"text": B_ALL}],
                          [{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
                          [{"text": B_BASE}, {"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
@@ -333,12 +337,13 @@ def render_settings():
 
 def render_bots():
     s = settings()
-    lines = [f"{'🟢' if s.get(k, True) else '⚪️'} {name} — {about}" for k, name, about in BOTS]
+    on = lambda k: s.get(k, DEFAULTS.get(k, True))
+    lines = [f"{'🟢' if on(k) else '⚪️'} {name} — {about}" for k, name, about in BOTS + YT_OPTS]
     text = ("🤖 Боты — нажми, чтобы включить или выключить. Действует сразу, в облаке.\n\n" + "\n".join(lines) +
             f"\n\nЛимиты в день: вакансии {s['limit_hot']}, эксперты+компании+партнёры+мастера {s['limit_cold']}, "
             f"YouTube {s.get('limit_yt', 20)}, дожимы {s['limit_fu']} (меняются в ⚙️ Настройки).\n"
             "На ответ клиента бот пишет только «Секундочку, сейчас вернусь», дальше ведёшь ты.")
-    kb = [[{"text": f"{name} {'✅' if s.get(k, True) else '❌'}", "callback_data": f"bot:{k}"}] for k, name, _ in BOTS]
+    kb = [[{"text": f"{name} {'✅' if on(k) else '❌'}", "callback_data": f"bot:{k}"}] for k, name, _ in BOTS + YT_OPTS]
     kb.append([{"text": "✅ Включить все", "callback_data": "bot:all_on"}, {"text": "⏸ Выключить все", "callback_data": "bot:all_off"}])
     return text, {"inline_keyboard": kb}
 
@@ -350,6 +355,11 @@ def run_analysis(ctl, days=7, intro=""):
         try: logt = open(LOGF, encoding="utf-8").read()[-400000:]
         except Exception: logt = ""
         text, acts = analyst.report(jload(STATE, {}), logt, settings(), days)
+        try:
+            import yt_stats
+            yts = yt_stats.text(jload(STATE, {}).get("sent") or {})
+            if yts: text += "\n\n" + yts
+        except Exception: pass
     except Exception as e:
         clog("разбор:", e); say("Разбор не получился: " + str(e)[:150]); return
     ctl.cfg["an_actions"] = acts; ctl.save()
@@ -471,11 +481,11 @@ def handle_callback(ctl, cq):
         s = settings()
         if key in ("all_on", "all_off"):
             for k, _, _ in BOTS: s[k] = key == "all_on"
-        elif key in {k for k, _, _ in BOTS}:
-            s[key] = not s.get(key, True)
+        elif key in {k for k, _, _ in BOTS + YT_OPTS}:
+            s[key] = not s.get(key, DEFAULTS.get(key, True))
         jsave(SETTINGS, s)
         edit(mid, *render_bots())
-        name = next((n for k, n, _ in BOTS if k == key), "")
+        name = next((n for k, n, _ in BOTS + YT_OPTS if k == key), "")
         answer(cq, ("Все боты включены" if key == "all_on" else "Все боты выключены") if key.startswith("all_") else
                f"{name}: {'включён' if s[key] else 'выключен'}")
     elif data == "crm:csv":
@@ -483,6 +493,13 @@ def handle_callback(ctl, cq):
     elif data == "spamcheck":
         to_inbox({"cmd": "spamcheck"})
         answer(cq, "Проверяю — ответ придёт через минуту" if ctl.running() else "Поиск выключен — проверю после запуска")
+    elif data.startswith("yt:"):                                   # бот 5, ручной режим: решение по письму
+        _, act, key = data.split(":", 2)
+        to_inbox({"cmd": "yt_ok" if act == "ok" else "yt_no", "key": key})
+        answer(cq, ("✅ Отправлю по очереди" if act == "ok" else "❌ Пропускаю") if ctl.running() else "Поиск выключен — решение применю после запуска")
+        try: api("editMessageReplyMarkup", chat_id=OWNER, message_id=mid,
+                 reply_markup={"inline_keyboard": [[{"text": "✅ Одобрено" if act == "ok" else "❌ Пропущено", "callback_data": "noop"}]]})
+        except Exception: pass
     elif data.startswith("qr:"):
         _, kind, u = data.split(":", 2)
         if kind == "own":
@@ -533,6 +550,12 @@ def evening_report(ctl):
                    f"@{u}" for u, e in sent.items()
                    if (e.get('replied') or '')[:10] == today and e.get('outcome') != 'no')[:300]
                if hot else "Поиск продолжается и ночью: заказы собираются, отправка — по расписанию."))
+    try:                                                           # бот 5: какая боль и какой вариант письма работают, почему отказывают
+        sys.path.insert(0, BASE)
+        import yt_stats
+        yts = yt_stats.text(sent)
+        if yts: text += "\n\n" + yts
+    except Exception as e: clog("yt_stats:", e)
     say(text, markup=refresh_kb("status"))
     if settings().get("advice_on", True):
         run_analysis(ctl, intro="Вечерний разбор\n\n")             # каждый вечер нейросеть сама ищет узкие места
