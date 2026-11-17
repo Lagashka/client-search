@@ -20,6 +20,12 @@ def clean(l):   # строка лога → шаблон события без �
     return l.split(":")[0][:60].strip() if ":" in l[:70] else l[:60].strip()
 
 ev = collections.Counter(clean(l) for l in lines)
+
+def _yts(st):
+    try:
+        sys.path.insert(0, HERE); import yt_stats
+        return yt_stats.report(st.get("sent") or {})
+    except Exception as e: return str(e)[:80]
 q = collections.Counter((x.get("variant") or "hot") for x in st.get("hot_q", []))
 cq = collections.Counter((x.get("variant") or "?") for x in st.get("cold_q", []))
 day = st.get("day", {})
@@ -31,7 +37,9 @@ print("DIAG", json.dumps({
     "biz_companies": dict(collections.Counter(c.get("status") for c in ((st.get("biz") or {}).get("companies") or {}).values())),
     "partners": {k: len((st.get("partners") or {}).get(k) or []) for k in ("frontier", "boards", "pending", "seen")},
     "youtube": dict({k: len((st.get("yt") or {}).get(k) or []) for k in ("frontier", "pending", "seen")},
-                    why=(st.get("yt") or {}).get("why") or {}),     # причины отсева и найденные боли — только счёт
+                    why=(st.get("yt") or {}).get("why") or {},      # причины отсева и найденные боли — только счёт
+                    wait=len(st.get("yt_wait") or {}), mail_q=len((st.get("yt") or {}).get("mail_q") or []),
+                    sent_mail=len(st.get("sent_mail") or {}), stats=_yts(st)),
     "mail": {"connected": bool((st.get("mail") or {}).get("init"))},
     "last_kind": st.get("last_kind"),
     "health_h_ago": {k: {f: round((datetime.datetime.now().timestamp() - v[f]) / 3600, 1) for f in ("sent", "found", "since") if v.get(f)}
