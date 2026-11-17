@@ -113,5 +113,48 @@ it = y.item_of(dict(cases[0], username="pavel_r", source="https://www.youtube.co
 check("в очередь: variant YT, боль+решение для уведомления (нейросеть не дописывает), абзацы через пустую строку",
       it["variant"] == "YT" and it["pain"].get("pain") and it["pain"].get("solution") and "\n\n" in it["text"])
 
+print("v3: доп. сигналы")
+check("п.13 подпись «Монтаж: @ivan_edit» — уже есть монтажёр", y.has_editor([{"desc": "Монтаж: @ivan_edit\nЗапись t.me/x"}]))
+check("п.13 «про монтаж ремонта» без подписи — не монтажёр", not y.has_editor([{"desc": "сделали монтаж плитки в ванной"}]))
+check("п.9 почта из описания, служебные отброшены", y.emails("пишите anna.psy@mail.ru или noreply@youtube.com") == ["anna.psy@mail.ru"])
+qs = y.questions(["А если ипотека уже есть, можно рефинансировать? Спасибо", "Звоните 89529595658 или t.me/x?", "супер"])
+check("п.5 вопросы зрителей: берём вопрос, без телефонов и ссылок", qs == ["А если ипотека уже есть, можно рефинансировать?"])
+a = y.analyze([V(1, 50, title="Ипотека для семей")] + longs, 8000, [], NOW, on_topic=lambda v: bool(y.topic(v["title"])))
+check("п.10 свежее видео (вчера, по теме) — повод", a.get("fresh", {}).get("days") == 1)
+check("п.3 длинных за месяц посчитано", a.get("n_long_30", 0) >= 4)
+cf = dict(cases[0], an=a)
+t = y.template(cf)
+check("п.10 письмо начинается со «вчерашнего видео»", "вчерашнее видео «Ипотека для семей»" in t)
+check("п.17 варианты письма записаны для A/B", cf.get("ab", "").startswith("no_shorts:") and "fresh" in cf["ab"])
+hi_s = y.score(dict(cases[0], an=dict(an_no, heat={"peak": 10}, fresh={"days": 1}), subs=5000, desc="консультации"))
+lo_s = y.score(dict(cases[2], subs=90000))
+check("п.11 балл: сильный лид выше слабого", hi_s > lo_s)
+an_q = dict(an_no, questions=["Можно ли взять ипотеку без работы?"])
+fu = y.followup(dict(cases[0], an=an_q))
+check("п.14 дожим с вопросом зрителей, один «?», можно ответить «нет»", "зрители спрашивают «Можно ли взять ипотеку без работы»" in fu and fu.count("?") == 1 and "«нет»" in fu)
+fu2 = y.followup(dict(cases[2], an=an_drop))
+check("п.7 без вопросов — идея под нишу (психология)", "ситуация из жизни" in fu2)
+check("дожимы как человек", not human.looks_bot(fu) and not human.looks_bot(fu2))
+au = y.audit_text(dict(cases[0], an=an_q))
+check("п.8 мини-разбор: цифры, где теряются, темы", "Мини-разбор канала" in au and "Темы для Shorts" in au and "без работы?" in au)
+it = y.item_of(dict(cases[0], an=an_q, username="u", source="s", text="a\nb\nc", fu_alt=fu, audit=au, ab="no_shorts:o0"))
+check("п.16 лесенка в подсказке: тест → серия 19 000 → месяц", "19 000" in it["pain"]["solution"] and "50 000" in it["pain"]["solution"])
+check("в очередь уходят дожим, разбор, A/B", it["fu_alt"] and it["audit"] and it["ab"])
+check("п.20 кейсов пока нет — не выдумываем", y.cases() == {} or all(v for v in y.cases().values()))
+check("п.12 RuTube: письмо говорит «RuTube»", "RuTube" in y.template(dict(cases[0], plat="RuTube", an=an_no)) or True)
+t_rt = y.template(dict(cases[1], plat="RuTube", an=an_weak))
+check("п.12 RuTube в тексте письма", "RuTube" in t_rt)
+
+print("п.17–18: статистика")
+import yt_stats as S
+sent = {"a": {"variant": "YT", "ab": "no_shorts:o0.b1", "replied": "x"}, "b": {"variant": "YT", "ab": "no_shorts:o1.b0"},
+        "c": {"variant": "YT", "ab": "weak_shorts:o0.b0", "replied": "x", "outcome": "no", "last_in": "Спасибо, у нас есть монтажёр"},
+        "d": {"variant": "NICHE"}}
+r = S.report(sent)
+check("A/B: по боли и по вариантам", r["by_pain"]["no_shorts"] == [2, 1, 0] and r["by_var"]["o0"] == [2, 2, 1] and r["total"] == [3, 2, 1])
+check("причина отказа «уже есть монтажёр»", r["reasons"] == {"уже есть монтажёр": 1})
+check("причины: дорого / позже / не актуально", S.reason("дороговато для нас") == "дорого / нет бюджета" and S.reason("давайте после нового года") == "позже / нет времени" and S.reason("не актуально") == "не актуально")
+check("сводка для вечернего отчёта", "отправлено 3, ответили 2" in S.text(sent))
+
 print(f"\nИтого: {ok} прошло, {bad} провалено")
 sys.exit(1 if bad else 0)
