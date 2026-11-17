@@ -256,11 +256,12 @@ def plan_send(st, s, d, now, lim_hot, warm, hot_hours=True, cold_hours=True):
                        and not safety.shoot_job((x.get("ctx") or "").split("\nБио автора")[0])]   # уже в очереди до 16.11
         i = first_index(st["hot_q"], "hot", s, "hot")
         if i is not None: cand["hot"] = ("hot", i)
+    # 17.11 (Егор): бот 5 «Мастера» пишет сразу после снятия ограничения, мягкий режим его не держит; остальные холодные ждут
+    if cold_hours and st["cold_q"] and d["cold"] < int(s.get("limit_cold", 20)):
+        for sl in (("NICHE",) if warm else ("BIZ", "PARTNER", "NICHE", "cold")):
+            i = first_index(st["cold_q"], "cold", s, sl)
+            if i is not None: cand[sl] = ("cold", i)
     if not warm and cold_hours:
-        if st["cold_q"] and d["cold"] < int(s.get("limit_cold", 20)):
-            for sl in ("BIZ", "PARTNER", "NICHE", "cold"):
-                i = first_index(st["cold_q"], "cold", s, sl)
-                if i is not None: cand[sl] = ("cold", i)
         if s.get("fu_on", True) and d["fu"] < int(s.get("limit_fu", 8)):
             for u, e in st["sent"].items():
                 h = FOLLOWUP_HOT_H if e.get("kind") == "hot" else FOLLOWUP_COLD_H
@@ -310,7 +311,7 @@ def health_problems(st, s, now, mods, warm=False, limited=False):
             out.append((sl, f"модуль не загрузился: {mods[sl]}")); continue
         if now - max(h.get("sent", 0), h["since"]) < HEALTH_IDLE_H * 3600: continue
         if limited: why = "аккаунт на паузе после ограничения Telegram"
-        elif warm and sl != "hot": why = "мягкий режим после ограничения: холодные и дожимы ждут 3 дня"
+        elif warm and sl not in ("hot", "NICHE"): why = "мягкий режим после ограничения: холодные и дожимы ждут 3 дня"
         elif sl == "fu": why = "нет молчунов, которым пора напомнить" if not st.get("sent") else f"лимит дожимов {s.get('limit_fu')} в день или некому напоминать"
         else:
             q = st.get("hot_q" if sl == "hot" else "cold_q") or []
@@ -1684,6 +1685,15 @@ def main():
                 st["cold10_done"] = today(); jsave(SETTINGS, dict(jload(SETTINGS, {}), limit_cold=10)); s = S(); save()
                 notify("❄️ Ограничение и мягкий режим позади: поставил холодных 10 в день (было 0), чтобы боты 2 и 3 начали писать. "
                        "Больше не ставлю: на длинные письма жаловались. Поменять — ⚙️ Настройки.", silent=True)
+            # 17.11 (Егор): тест бота 5 — пишут только «Мастера». Один раз выключаем отклики на вакансии (1), компании (2),
+            # партнёров (3), hh (4) и холодные экспертам; лимит холодных 10 в день (он же лимит мастеров). Вернуть — пульт.
+            if not st.get("masters_only_done"):
+                cur = jload(SETTINGS, {})
+                cur.update(hot_on=False, biz_on=False, partners_on=False, hhapi_on=False, cold_on=False, niche_on=True)
+                if int(cur.get("limit_cold", s.get("limit_cold", 0)) or 0) == 0: cur["limit_cold"] = 10
+                jsave(SETTINGS, cur); s = S(); st["masters_only_done"] = today(); st["cold10_done"] = today(); save()
+                notify("🧪 Тест бота 5: пишут только «Мастера» (до 10 в день), сразу после снятия ограничения. "
+                       "Отклики на вакансии, компании, партнёры, hh и холодные экспертам выключены — включить в пульте.", silent=True)
             lim_hot = min(int(s["limit_hot"]), WARM_HOT) if warm else int(s["limit_hot"])
             gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
