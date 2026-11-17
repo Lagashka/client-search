@@ -26,12 +26,11 @@ day = st.get("day", {})
 print("DIAG", json.dumps({
     "today": day, "limited_until": st.get("limited_until") or "", "warm_from": st.get("warm_from") or "",
     "hot_q": dict(q), "cold_q": dict(cq),
-    "settings": {k: s.get(k) for k in ("hot_on", "cold_on", "fu_on", "biz_on", "partners_on", "niche_on", "hhapi_on", "mail_on", "limit_hot", "limit_cold", "limit_fu", "gap", "hold_only")},
+    "settings": {k: s.get(k) for k in ("hot_on", "cold_on", "fu_on", "biz_on", "partners_on", "niche_on", "yt_on", "mail_on", "limit_hot", "limit_cold", "limit_yt", "limit_fu", "gap", "hold_only")},
     "want": jl("bot-control.json", {}).get("want"),
     "biz_companies": dict(collections.Counter(c.get("status") for c in ((st.get("biz") or {}).get("companies") or {}).values())),
     "partners": {k: len((st.get("partners") or {}).get(k) or []) for k in ("frontier", "boards", "pending", "seen")},
-    "hh_api": {"token": bool((st.get("hh_api") or {}).get("access")), "dead": bool((st.get("hh_api") or {}).get("dead")),
-               "applied": len(((st.get("hh_api") or {}).get("applied") or {}))},
+    "youtube": {k: len((st.get("yt") or {}).get(k) or []) for k in ("frontier", "pending", "seen")},
     "mail": {"connected": bool((st.get("mail") or {}).get("init"))},
     "last_kind": st.get("last_kind"),
     "health_h_ago": {k: {f: round((datetime.datetime.now().timestamp() - v[f]) / 3600, 1) for f in ("sent", "found", "since") if v.get(f)}
