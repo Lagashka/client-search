@@ -54,10 +54,10 @@ BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на ваканс
 # настройки бота 5 — не боты, кнопки «включить/выключить все» их не трогают
 YT_OPTS = [("yt_manual", "5️⃣ ✋ Ручной режим", "каждое письмо YouTube сначала тебе: ✅ Отправить / ❌ Пропустить"),
            ("yt_mail_on", "5️⃣ 📧 На почту", "эксперту без Telegram — письмо на почту с твоего адреса (до 10 в день)")]
-KEYBOARD = {"keyboard": [[{"text": B_ALL}],
-                         [{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
-                         [{"text": B_BASE}, {"text": B_STATUS}, {"text": B_REPLIES}, {"text": B_SENT}],
-                         [{"text": B_ANALYZE}, {"text": B_SETTINGS}, {"text": B_LOG}, {"text": B_RESTART}]],
+# 17.11 пульт v4: 5 кнопок вместо 12. Старые названия кнопок тоже понимаются (у кого осталась старая клавиатура).
+B_HOME, B_LEADS, B_APPROVE, B_MORE = "🏠 Главная", "🔥 Клиенты", "📥 Одобрить", "⚙️ Ещё"
+KEYBOARD = {"keyboard": [[{"text": B_HOME}, {"text": B_LEADS}],
+                         [{"text": B_APPROVE}, {"text": B_BOTS}, {"text": B_MORE}]],
             "resize_keyboard": True, "is_persistent": True}
 
 # Быстрые ответы клиенту — по прайсу 2.0 и «скрипту как ответить 2.0» Егора
@@ -295,7 +295,111 @@ def fmt_log():
     lines = [l for l in lines if re.match(r"\d\d\.\d\d \d", l)][-15:]
     return "Последние 15 событий:\n\n" + "\n".join(l[:170] for l in lines)
 
+# ---------------------------------------------------------------- пульт v4: главная, клиенты, одобрение
+BOT_ROWS = [(("hot_on", "1️⃣ Вакансии", "hot", "limit_hot"), ("cold_on", "❄️ Эксперты", "cold", None)),
+            (("biz_on", "2️⃣ Компании", "BIZ", None), ("partners_on", "3️⃣ Партнёры", "PARTNER", None)),
+            (("niche_on", "4️⃣ Мастера", "NICHE", None), ("yt_on", "5️⃣ YouTube", "YT", "limit_yt")),
+            (("fu_on", "🔁 Дожимы", "fu", "limit_fu"),)]
+
+def waiting(ctl, st=None):
+    """Письма бота 5, которые ждут твоего решения (без уже нажатых)."""
+    st = st or jload(STATE, {})
+    done = set(ctl.cfg.get("yt_handled") or [])
+    return [(k, v) for k, v in sorted((st.get("yt_wait") or {}).items(), key=lambda x: -x[1].get("score", 0)) if k not in done]
+
+def hot_leads(st, days=14):
+    """Клиенты, которые ответили и ждут твоего ответа: последнее сообщение — его, не отказ, ты после него не писал."""
+    out, now = [], time.time()
+    for u, e in (st.get("sent") or {}).items():
+        if not e.get("replied") or e.get("outcome") == "no" or e.get("crm") == "refused" or e.get("closed") or e.get("junk"): continue
+        th = [m for m in (e.get("thread") or []) if not m.get("auto")]
+        if th and th[-1].get("who") != "them": continue
+        if e.get("human_ts", 0) > e.get("last_in_ts", 0): continue
+        ts = e.get("last_in_ts") or e.get("ts", now)
+        if now - ts > days * 86400: continue
+        out.append((ts, u, e))
+    return sorted(out, reverse=True)
+
+def fmt_home(ctl):
+    st, s, lv = jload(STATE, {}), settings(), jload(LIVE, {})
+    d, by = st.get("day", {}), (st.get("day", {}).get("by") or {})
+    now_iso = datetime.datetime.now().isoformat()
+    lim = st.get("limited_until") or ""
+    if not ctl.running(): head = "🔴 Выключен — нажми 🚀 Включить всё"
+    elif lim > now_iso: head = f"⛔ Пауза до {lim[11:16]} {lim[8:10]}.{lim[5:7]} (защита аккаунта), поиск идёт"
+    else: head = "🟢 Работает" + (f" · {lv.get('phase')}" if time.time() - lv.get("ts", 0) < 300 and lv.get("phase") else "")
+    wf = st.get("warm_from")
+    if wf and not s.get("warm_off"):
+        try:
+            end = datetime.datetime.fromisoformat(wf) + datetime.timedelta(days=3)
+            if end > datetime.datetime.now():
+                head += f"\n🟡 Мягкий режим до {end:%d.%m %H:%M}: после бана пишут вакансии, мастера и YouTube, остальные ждут"
+        except Exception: pass
+    sent_today = sum(by.values()) if by else d.get("hot", 0) + d.get("cold", 0) + d.get("fu", 0)
+    rep = [e for e in (st.get("sent") or {}).values() if (e.get("replied") or "")[:10] == datetime.date.today().isoformat()]
+    lines = [head, "", f"📤 Сегодня отправлено {sent_today} · ответили {len(rep)} (🔥 {sum(1 for e in rep if e.get('outcome') != 'no')})", ""]
+    for row in BOT_ROWS:
+        cells = []
+        for key, name, slot, limk in row:
+            n = by.get(slot, 0)
+            cells.append(f"{name} {'✅' if s.get(key, True) else '❌'} {n}" + (f"/{s.get(limk)}" if limk else ""))
+        lines.append(" · ".join(cells))
+    w, hl = len(waiting(ctl, st)), len(hot_leads(st))
+    lines += ["", f"📥 Ждут одобрения: {w}" + (" — нажми, чтобы отправить" if w else ""),
+              f"🔥 Клиенты ждут ответа: {hl}" + (" — ответь сейчас, пока тёплые" if hl else "")]
+    kb = [[{"text": "🚀 Включить всё", "callback_data": "go:all"}, {"text": "⏸ Пауза" if ctl.running() else "▶️ Запустить",
+                                                                   "callback_data": "go:pause" if ctl.running() else "go:resume"}],
+          [{"text": f"📥 Одобрить ({w})", "callback_data": "nav:approve"}, {"text": f"🔥 Клиенты ({hl})", "callback_data": "nav:leads"}]]
+    return "\n".join(lines), kb
+
+def fmt_leads(ctl):
+    rows = hot_leads(jload(STATE, {}))
+    if not rows: return "🔥 Сейчас никто не ждёт ответа. Как только клиент ответит — пришлю сразу.", []
+    out, kb = [f"🔥 Ждут твоего ответа: {len(rows)} (свежие сверху)"], []
+    for ts, u, e in rows[:6]:
+        h = int((time.time() - ts) // 3600)
+        out.append(f"\n• {e.get('display') or u} (@{u}) · {h} ч назад\n  «{(e.get('last_in') or '')[:120]}»")
+        nm = (e.get("display") or u)[:14]
+        kb.append([{"text": f"💬 {nm}", "url": f"https://t.me/{u}"}, {"text": "💰", "callback_data": f"qr:price:{u}"},
+                   {"text": "🧪", "callback_data": f"qr:test:{u}"}, {"text": "✍️", "callback_data": f"qr:own:{u}"}])
+    out.append("\n💬 чат · 💰 прайс · 🧪 тест · ✍️ свой ответ")
+    return "\n".join(out), kb
+
+def fmt_card(ctl):
+    """Одно письмо на одобрение (лучшее по баллу первым) — кнопки меняют это же сообщение на следующее."""
+    w = waiting(ctl)
+    if not w: return "📥 Одобрять нечего — все письма разобраны ✅\nНовые придут, как только бот найдёт экспертов.", []
+    k, it = w[0]
+    pn = (it.get("pain") or {}).get("pain", "")
+    to = ("📧 " + it["mail"]) if it.get("mail") else "@" + it["username"]
+    text = (f"📥 1 из {len(w)} · 🎥 {it.get('plat', 'YouTube')} · балл {it.get('score', 0)}\n{it.get('display', '')} {to}\n"
+            f"{it.get('source', '')}\n🎯 {pn}\n\n✉️ Письмо:\n{it.get('text', '')}\n\n🔁 Через 2 дня, если промолчит:\n{it.get('fu_alt', '')}")
+    kb = [[{"text": "✅ Отправить", "callback_data": f"yc:ok:{k}"}, {"text": "✏️ Изменить", "callback_data": f"yc:ed:{k}"},
+           {"text": "❌ Пропустить", "callback_data": f"yc:no:{k}"}],
+          [{"text": f"✅ Отправить все ({len(w)})", "callback_data": "yc:all:x"}]]
+    if it.get("source"): kb.append([{"text": "📺 Открыть канал", "url": it["source"]}])
+    return text, kb
+
+def handled(ctl, *keys):
+    ctl.cfg["yt_handled"] = ((ctl.cfg.get("yt_handled") or []) + list(keys))[-300:]; ctl.save()
+
+def fmt_more(ctl):
+    s = settings()
+    return ("⚙️ Ещё — всё остальное", [
+        [{"text": "⚙️ Лимиты и пауза", "callback_data": "m:settings"}, {"text": "📝 Лог", "callback_data": "m:log"}],
+        [{"text": "📤 Отправленные", "callback_data": "m:sent"}, {"text": "🗂 База лидов", "callback_data": "m:base"}],
+        [{"text": "🧠 Разбор нейросетью", "callback_data": "m:analyze"}, {"text": "🛡 Проверить аккаунт", "callback_data": "spamcheck"}],
+        [{"text": "🔄 Обновить бота (свежий код)", "callback_data": "m:update"}],
+        [{"text": ("🟡 Мягкий режим после бана: ВКЛ" if not s.get("warm_off") else "⚠️ Мягкий режим: ВЫКЛ (риск бана)"),
+          "callback_data": "m:warm"}]])
+
 def render(what, ctl):
+    if what == "home":
+        t, kb = fmt_home(ctl); return t + stamp(), refresh_kb("home", kb)
+    if what == "leads":
+        t, kb = fmt_leads(ctl); return t + stamp(), refresh_kb("leads", kb)
+    if what == "approve":
+        t, kb = fmt_card(ctl); return t, {"inline_keyboard": kb + [[{"text": "🔄 Обновить", "callback_data": "refresh:approve"}]]}
     if what == "status": return fmt_status(ctl) + stamp(), refresh_kb("status")
     if what == "replies":
         text, kb = fmt_replies(); return text + stamp(), refresh_kb("replies", kb)
@@ -368,6 +472,10 @@ def run_analysis(ctl, days=7, intro=""):
     say(intro + text, markup={"inline_keyboard": kb})
 
 HELP = ("Пульт поиска клиентов 🎬\n\n"
+        f"{B_HOME} — всё на одном экране: что делает бот, сколько отправлено, кто ждёт тебя; 🚀 Включить всё / ⏸ Пауза\n"
+        f"{B_LEADS} — клиенты, которые ответили и ждут тебя: чат, прайс, тест, свой ответ в одно касание\n"
+        f"{B_APPROVE} — письма YouTube по одному: ✅ отправить, ✏️ изменить, ❌ пропустить, или отправить все\n"
+        f"{B_MORE} — лимиты, лог, база, разбор, проверка аккаунта, обновить бота\n\n"
         f"{B_ALL} — одной кнопкой включить все боты и нейросеть и запустить поиск\n"
         f"{B_BOTS} — включить/выключить бота 1 (вакансии и эксперты), 2 (компании), 3 (партнёры), 4 (мастера), 5 (YouTube)\n"
         f"{B_ANALYZE} — нейросеть разбирает цифры всех ботов и предлагает, что поменять (применяется кнопкой)\n"
@@ -388,14 +496,29 @@ def handle_text(ctl, text):
     if low in ("/cancel", "отмена"):
         ctl.cfg.pop("pending", None); ctl.save(); say("Ок, отменил."); return
     buttons = {B_START.lower(), B_STOP.lower(), B_STATUS.lower(), B_REPLIES.lower(), B_SENT.lower(), B_BASE.lower(),
-               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower(), B_ANALYZE.lower(), B_ALL.lower()}
-    if pend and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
+               B_SETTINGS.lower(), B_LOG.lower(), B_RESTART.lower(), B_BOTS.lower(), B_ANALYZE.lower(), B_ALL.lower(),
+               B_HOME.lower(), B_LEADS.lower(), B_APPROVE.lower(), B_MORE.lower()}
+    if pend and pend.get("yt_edit") and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
+        to_inbox({"cmd": "yt_edit", "key": pend["yt_edit"], "text": t})       # исправленный текст письма → сразу в отправку
+        handled(ctl, pend["yt_edit"]); ctl.cfg.pop("pending", None); ctl.save()
+        say("✏️ Сохранил твой текст и поставил письмо в отправку ✅", silent=True)
+        say(*render("approve", ctl))
+        return
+    if pend and pend.get("to") and low not in buttons and not low.startswith("/") and time.time() < pend.get("until", 0):
         to_inbox({"cmd": "send", "to": pend["to"], "text": t, "label": "✍️ Твой ответ"})
         ctl.cfg.pop("pending", None); ctl.save()
         say(f"📨 Отправляю @{pend['to']}…" + ("" if ctl.running() else "\nПоиск выключен — уйдёт сразу после ▶️ Запустить."))
         return
     if low in ("/start", "/help", "помощь", "меню"):
-        say(HELP)
+        say(HELP); say(*render("home", ctl))
+    elif low in (B_HOME.lower(), "/home", "главная"):
+        say(*render("home", ctl))
+    elif low in (B_LEADS.lower(), "/leads", "клиенты"):
+        say(*render("leads", ctl))
+    elif low in (B_APPROVE.lower(), "/approve", "одобрить"):
+        say(*render("approve", ctl))
+    elif low in (B_MORE.lower(), "/more", "ещё", "еще"):
+        t_, kb_ = fmt_more(ctl); say(t_, {"inline_keyboard": kb_})
     elif low in (B_START.lower(), "/go", "/run", "запустить", "старт"):
         ctl.cfg["want"] = True; ctl.crashes = []; ctl.save()
         if ctl.start(): say("▶️ Запускаю поиск. Через минуту нажми 📊 Статус — увидишь, чем он занят.")
@@ -493,8 +616,57 @@ def handle_callback(ctl, cq):
     elif data == "spamcheck":
         to_inbox({"cmd": "spamcheck"})
         answer(cq, "Проверяю — ответ придёт через минуту" if ctl.running() else "Поиск выключен — проверю после запуска")
+    elif data.startswith("go:"):                                   # главная: включить всё / пауза / запуск
+        act = data[3:]
+        if act == "all":
+            s = settings()
+            for k, _, _ in BOTS: s[k] = True
+            s["advice_on"] = True; s["pain_on"] = True; jsave(SETTINGS, s)
+            ctl.cfg["want"] = True; ctl.crashes = []; ctl.save(); ctl.start()
+            answer(cq, "🚀 Все боты включены")
+        elif act == "pause":
+            ctl.cfg["want"] = False; ctl.save(); ctl.stop(); answer(cq, "⏸ На паузе — письма не уходят")
+        else:
+            ctl.cfg["want"] = True; ctl.crashes = []; ctl.save(); ctl.start(); answer(cq, "▶️ Запущено")
+        edit(mid, *render("home", ctl))
+    elif data.startswith("nav:"):
+        answer(cq); say(*render(data[4:], ctl))
+    elif data.startswith("yc:"):                                   # карточка одобрения: действие → следующая карточка
+        _, act, key = data.split(":", 2)
+        if act == "all":
+            ks = [k for k, _ in waiting(ctl)]
+            to_inbox({"cmd": "yt_ok_all", "keys": ks}); handled(ctl, *ks)
+            answer(cq, f"✅ Отправлю все {len(ks)} по очереди, с паузами")
+        elif act == "ed":
+            ctl.cfg["pending"] = {"yt_edit": key, "until": time.time() + 900}; ctl.save(); answer(cq)
+            it = dict(waiting(ctl)).get(key) or {}
+            say("✏️ Пришли исправленный текст письма одним сообщением (абзацы — через пустую строку). Передумал — /cancel\n\n"
+                "Сейчас:\n" + it.get("text", ""), markup={"force_reply": True, "input_field_placeholder": "Текст письма"})
+            return
+        else:
+            to_inbox({"cmd": "yt_ok" if act == "ok" else "yt_no", "key": key}); handled(ctl, key)
+            answer(cq, "✅ В отправку" if act == "ok" else "❌ Пропущено")
+        edit(mid, *render("approve", ctl))
+    elif data.startswith("m:"):                                    # меню «Ещё»
+        act = data[2:]; answer(cq)
+        if act == "settings": say(*render_settings())
+        elif act == "log": say(*render("log", ctl))
+        elif act == "sent": say(*render("sent", ctl))
+        elif act == "base": send_crm(csv_too=False)
+        elif act == "analyze": say("🧠 Разбираю цифры всех ботов, до минуты…", silent=True); run_analysis(ctl)
+        elif act == "update":
+            to_inbox({"cmd": "update"})
+            say("🔄 Перезапускаюсь на свежем коде: сохраню всё и уйду, новый запуск поднимется сам через 3–10 минут. "
+                "Очереди, база и настройки сохраняются.")
+        elif act == "warm":
+            s = settings(); s["warm_off"] = not s.get("warm_off", False); jsave(SETTINGS, s)
+            say("⚠️ Мягкий режим выключен: все боты пишут в полную силу сразу. Аккаунт недавно был в ограничении — "
+                "если @SpamBot снова ограничит, бот сам встанет на паузу." if s["warm_off"] else
+                "🟡 Мягкий режим включён: 3 дня после бана пишут только вакансии, мастера и YouTube.", silent=True)
+            t_, kb_ = fmt_more(ctl); edit(mid, t_, {"inline_keyboard": kb_})
     elif data.startswith("yt:"):                                   # бот 5, ручной режим: решение по письму
         _, act, key = data.split(":", 2)
+        handled(ctl, key)
         to_inbox({"cmd": "yt_ok" if act == "ok" else "yt_no", "key": key})
         answer(cq, ("✅ Отправлю по очереди" if act == "ok" else "❌ Пропускаю") if ctl.running() else "Поиск выключен — решение применю после запуска")
         try: api("editMessageReplyMarkup", chat_id=OWNER, message_id=mid,
