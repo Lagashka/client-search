@@ -200,7 +200,8 @@ def jsave(p, data):
     os.replace(tmp, p)
 
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True,   # 16.11: дожимы — свой лимит, не съедают новые письма
-            "biz_on": True, "partners_on": True, "niche_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
+            "biz_on": True, "partners_on": True, "niche_on": True, "yt_on": True, "limit_yt": 20, "mail_on": True}
+# 17.11: бот hh.ru (hh_api) удалён по решению Егора; бот 5 «YouTube» — свой лимит limit_yt, не съедает лимит холодных
 _SC ={"m": None, "v": dict(DEFAULTS)}
 
 def bot_key(item, kind):
@@ -210,6 +211,7 @@ def bot_key(item, kind):
     if v == "BIZ": return "biz_on"
     if v == "PARTNER": return "partners_on"
     if v == "NICHE": return "niche_on"
+    if v == "YT": return "yt_on"
     return "hot_on" if kind == "hot" else "cold_on"
 
 def pick_allowed(q, kind, s):
@@ -222,16 +224,22 @@ def pick_allowed(q, kind, s):
 
 # ---- 16.11: честная очередь между ботами. Раньше холодные (боты 2–3, эксперты) шли только при пустой очереди
 # вакансий — она не пустеет никогда, и боты 2–3 не написали ни одного письма. Теперь отправка идёт по кругу.
-SLOTS = ("hot", "BIZ", "PARTNER", "NICHE", "cold", "fu")          # порядок круга: каждый бот получает свою очередь
-SLOT_BOT = {"hot": "hot_on", "BIZ": "biz_on", "PARTNER": "partners_on", "NICHE": "niche_on", "cold": "cold_on", "fu": "fu_on"}
-SLOT_NAME = {"hot": "1️⃣ Вакансии", "BIZ": "2️⃣ Компании", "PARTNER": "3️⃣ Партнёры", "NICHE": "5️⃣ Мастера", "cold": "❄️ Эксперты", "fu": "🔁 Дожимы"}
+SLOTS = ("hot", "BIZ", "PARTNER", "NICHE", "YT", "cold", "fu")    # порядок круга: каждый бот получает свою очередь
+SLOT_BOT = {"hot": "hot_on", "BIZ": "biz_on", "PARTNER": "partners_on", "NICHE": "niche_on", "YT": "yt_on", "cold": "cold_on", "fu": "fu_on"}
+SLOT_NAME = {"hot": "1️⃣ Вакансии", "BIZ": "2️⃣ Компании", "PARTNER": "3️⃣ Партнёры", "NICHE": "4️⃣ Мастера", "YT": "5️⃣ YouTube",
+             "cold": "❄️ Эксперты", "fu": "🔁 Дожимы"}
+
+def count_sent(d, item, kind):
+    """Счётчик дня после отправки: YouTube — свой (limit_yt), остальные холодные — общий cold (limit_cold)."""
+    k = "yt" if slot_of(item, kind) == "YT" else kind
+    d[k] = d.get(k, 0) + 1
 HEALTH_IDLE_H = 24        # включённый бот столько часов без единой отправки — уведомление с причиной
 
 def slot_of(item, kind):
     """Из какого бота письмо: вакансии (вся очередь hot_q), 2 компании, 3 партнёры, эксперты."""
     if kind == "hot": return "hot"
     v = item.get("variant")
-    return v if v in ("BIZ", "PARTNER", "NICHE") else "cold"
+    return v if v in ("BIZ", "PARTNER", "NICHE", "YT") else "cold"
 
 def first_index(q, kind, s, slot):
     """Индекс первого письма нужного бота (бот включён), или None. Очередь не трогает."""
@@ -256,9 +264,13 @@ def plan_send(st, s, d, now, lim_hot, warm, hot_hours=True, cold_hours=True):
                        and not safety.shoot_job((x.get("ctx") or "").split("\nБио автора")[0])]   # уже в очереди до 16.11
         i = first_index(st["hot_q"], "hot", s, "hot")
         if i is not None: cand["hot"] = ("hot", i)
-    # 17.11 (Егор): бот 5 «Мастера» пишет сразу после снятия ограничения, мягкий режим его не держит; остальные холодные ждут
-    if cold_hours and st["cold_q"] and d["cold"] < int(s.get("limit_cold", 20)):
-        for sl in (("NICHE",) if warm else ("BIZ", "PARTNER", "NICHE", "cold")):
+    # 17.11 (Егор): боты 4 «Мастера» и 5 «YouTube» пишут сразу после снятия ограничения, мягкий режим их не держит;
+    # остальные холодные ждут. У YouTube свой дневной лимит limit_yt, у остальных — общий limit_cold.
+    if cold_hours and st["cold_q"]:
+        for sl in (("NICHE", "YT") if warm else ("BIZ", "PARTNER", "NICHE", "YT", "cold")):
+            if sl == "YT":
+                if d.get("yt", 0) >= int(s.get("limit_yt", 20)): continue
+            elif d["cold"] >= int(s.get("limit_cold", 20)): continue
             i = first_index(st["cold_q"], "cold", s, sl)
             if i is not None: cand[sl] = ("cold", i)
     if not warm and cold_hours:
@@ -311,12 +323,13 @@ def health_problems(st, s, now, mods, warm=False, limited=False):
             out.append((sl, f"модуль не загрузился: {mods[sl]}")); continue
         if now - max(h.get("sent", 0), h["since"]) < HEALTH_IDLE_H * 3600: continue
         if limited: why = "аккаунт на паузе после ограничения Telegram"
-        elif warm and sl not in ("hot", "NICHE"): why = "мягкий режим после ограничения: холодные и дожимы ждут 3 дня"
+        elif warm and sl not in ("hot", "NICHE", "YT"): why = "мягкий режим после ограничения: холодные и дожимы ждут 3 дня"
         elif sl == "fu": why = "нет молчунов, которым пора напомнить" if not st.get("sent") else f"лимит дожимов {s.get('limit_fu')} в день или некому напоминать"
         else:
             q = st.get("hot_q" if sl == "hot" else "cold_q") or []
             n = len(q) if sl == "hot" else sum(1 for x in q if slot_of(x, "cold") == sl)
-            lim, used = (s.get("limit_hot"), d.get("hot", 0)) if sl == "hot" else (s.get("limit_cold"), d.get("cold", 0))
+            lim, used = ((s.get("limit_hot"), d.get("hot", 0)) if sl == "hot" else (s.get("limit_yt"), d.get("yt", 0)) if sl == "YT"
+                         else (s.get("limit_cold"), d.get("cold", 0)))
             if not n: why = "поиск ничего не находит" + (f" (последняя находка {datetime.datetime.fromtimestamp(h['found']):%d.%m %H:%M})" if h.get("found") else " — ни одной находки")
             elif used >= int(lim or 0): why = f"в очереди {n} писем, но дневной лимит ({lim}) исчерпан"
             else: why = f"в очереди {n} писем, но они не уходят — смотри лог («НЕ ПИШУ», «сбой», «пропуск»)"
@@ -422,8 +435,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import crm, autoreply, guard, zlib, human, safety
 try: import analyst                      # разбор воронки и советы по ответам (нейросеть Groq + правила)
 except Exception: analyst = None
-try: import hh_api                       # бот 4: отклики на hh.ru через официальный API (без капчи), нужны секреты HH_*
-except Exception: hh_api = None
 try: import mail_watch                   # почта: клиент ответил письмом → нейросеть разбирает, дожимы в Telegram стоп
 except Exception: mail_watch = None
 try:                                     # поиск бизнесов (hh.ru + 2ГИС): локально — соседняя папка «Поиск бизнеса», в облаке — рядом
@@ -438,12 +449,18 @@ try:                                     # бот 3: партнёры (SMM, та
     PAR_ERR = ""
 except Exception as _e:
     partners = None; PAR_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"
-try:                                     # бот 5: мастера (стройка/ремонт, авто, премиум-ремесло) — «Поиск мастеров\niches.py», в облаке рядом
+try:                                     # бот 4: мастера (стройка/ремонт, авто, премиум-ремесло) — «Поиск мастеров\niches.py», в облаке рядом
     sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск мастеров"))
     import niches
     NIC_ERR = ""
 except Exception as _e:
     niches = None; NIC_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"
+try:                                     # бот 5: YouTube-эксперты → Telegram (17.11) — «Поиск на YouTube\yt_hunt.py», в облаке рядом
+    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(BASE)), "Поиск на YouTube"))
+    import yt_hunt
+    YT_ERR = ""
+except Exception as _e:
+    yt_hunt = None; YT_ERR = f"{type(_e).__name__}: {str(_e)[:120]}"
 
 # Команда из двух аккаунтов (Егор и Саша) делит контакты пополам, чтобы один человек не получил два письма.
 # CONTACTS_PART = "0" или "1" (у Егора в облаке "0", у Саши "1"); пусто — пишем всем.
@@ -1281,7 +1298,7 @@ def main():
 
     def day():
         if st["day"].get("date") != today():          # итог дня присылает пульт в 21:00, тут только обнуляем
-            st["day"] = {"date": today(), "hot": 0, "cold": 0, "fu": 0, "by": {}}
+            st["day"] = {"date": today(), "hot": 0, "cold": 0, "fu": 0, "yt": 0, "by": {}}
         return st["day"]
 
     tick_last = [0.0]
@@ -1336,7 +1353,7 @@ def main():
     def why_idle(s, d, limited):
         if limited: return f"⛔ пауза до {st['limited_until'][11:16]} (защита аккаунта)"
         parts = []
-        off = [n for k, n in (("hot_on", "1 вакансии"), ("biz_on", "2 компании"), ("partners_on", "3 партнёры"), ("niche_on", "5 мастера")) if not s.get(k, True)]
+        off = [n for k, n in (("hot_on", "1 вакансии"), ("biz_on", "2 компании"), ("partners_on", "3 партнёры"), ("niche_on", "4 мастера"), ("yt_on", "5 YouTube")) if not s.get(k, True)]
         if off: parts.append("выключены боты: " + ", ".join(off))
         if not s["hot_on"]: pass
         elif not in_hours(HOURS_HOT): parts.append(f"вакансии: ночь, продолжу в {HOURS_HOT[0]}:00 МСК")
@@ -1689,11 +1706,13 @@ def main():
             # партнёров (3), hh (4) и холодные экспертам; лимит холодных 10 в день (он же лимит мастеров). Вернуть — пульт.
             if not st.get("masters_only_done"):
                 cur = jload(SETTINGS, {})
-                cur.update(hot_on=False, biz_on=False, partners_on=False, hhapi_on=False, cold_on=False, niche_on=True)
+                cur.update(hot_on=False, biz_on=False, partners_on=False, cold_on=False, niche_on=True, yt_on=True)
+                cur.pop("hhapi_on", None); cur.pop("limit_hhapi", None)
+                cur.setdefault("limit_yt", 20)
                 if int(cur.get("limit_cold", s.get("limit_cold", 0)) or 0) == 0: cur["limit_cold"] = 10
                 jsave(SETTINGS, cur); s = S(); st["masters_only_done"] = today(); st["cold10_done"] = today(); save()
-                notify("🧪 Тест бота 5: пишут только «Мастера» (до 10 в день), сразу после снятия ограничения. "
-                       "Отклики на вакансии, компании, партнёры, hh и холодные экспертам выключены — включить в пульте.", silent=True)
+                notify("🧪 Тест ботов 4 и 5: пишут только «Мастера» (до 10 в день) и «YouTube» (до 20 в день), сразу после снятия "
+                       "ограничения. Отклики на вакансии, компании, партнёры и холодные экспертам выключены — включить в пульте.", silent=True)
             lim_hot = min(int(s["limit_hot"]), WARM_HOT) if warm else int(s["limit_hot"])
             gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
@@ -1771,7 +1790,7 @@ def main():
                         except Limited: raise
                         except Exception as ex: r, peer = "fail:" + str(ex).splitlines()[0][:100], None
                         if r == "sent":
-                            q.pop(0); d[kind] += 1; fails = 0
+                            q.pop(0); count_sent(d, item, kind); fails = 0
                             sl_ = slot_of(item, kind)                 # счёт по каждому боту + отметка для сторожа
                             d.setdefault("by", {})[sl_] = d.get("by", {}).get(sl_, 0) + 1
                             st.setdefault("health", {}).setdefault(sl_, {})["sent"] = now
@@ -1783,7 +1802,8 @@ def main():
                                 "n_out": getattr(web, "last_parts", 1) or 1}
                             crm_sync()
                             log(f"ОТПРАВЛЕНО [{'вакансия' if kind == 'hot' else 'холодное'}] @{item['username']} — сегодня: "
-                                f"вакансии {d['hot']}/{s['limit_hot']}, холодные {d['cold']}/{s['limit_cold']}, дожимы {d['fu']}/{s['limit_fu']}")
+                                f"вакансии {d['hot']}/{s['limit_hot']}, холодные {d['cold']}/{s['limit_cold']}, "
+                                f"YouTube {d.get('yt', 0)}/{s.get('limit_yt', 20)}, дожимы {d['fu']}/{s['limit_fu']}")
                             next_send = time.time() + gap()
                             st["burst"] = st.get("burst", 0) + 1
                             if st["burst"] >= st.setdefault("burst_max", random.randint(*REST_EVERY)):   # перерыв, как у человека
@@ -1823,7 +1843,8 @@ def main():
                 try:
                     probs = health_problems(st, s, now, {"BIZ": "" if bizhunt else BIZ_ERR or "не найден",
                                                          "PARTNER": "" if partners else PAR_ERR or "не найден",
-                                                         "NICHE": "" if niches else NIC_ERR or "не найден"}, warm, limited)
+                                                         "NICHE": "" if niches else NIC_ERR or "не найден",
+                                                         "YT": "" if yt_hunt else YT_ERR or "не найден"}, warm, limited)
                     hn = st.setdefault("health_notified", {})
                     fresh = [(sl_, w_) for sl_, w_ in probs if hn.get(sl_) != today()]
                     if fresh:
@@ -1902,15 +1923,24 @@ def main():
                 except Exception as e:
                     log("поиск мастеров не удался:", str(e)[:120])
                 save()
-            # ---- 3d. почта (раз в 10 мин) и бот 4 — hh.ru через API (отклики + ответы работодателей)
+            # ---- 3c-ter. бот 5 «YouTube»: эксперты с живыми каналами → письмо в Telegram, только у кого есть Telegram (17.11)
+            if s.get("yt_on", True) and yt_hunt and now - st.get("yt_ts", 0) > 15 * 60 and nq("YT") < 25:
+                st["yt_ts"] = now
+                live(phase="ищу экспертов на YouTube")
+                try:
+                    skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u)
+                    for item in yt_hunt.yt_step(st.setdefault("yt", {}), skip=skip):
+                        st["cold_q"].insert(min(1, len(st["cold_q"])), item)
+                        contacted.add(item["username"].lower())
+                        st.setdefault("health", {}).setdefault("YT", {})["found"] = now
+                        log(f"YouTube-эксперт в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
+                except Exception as e:
+                    log("поиск на YouTube не удался:", str(e)[:120])
+                save()
+            # ---- 3d. почта (раз в 10 мин)
             if mail_watch and s.get("mail_on", True) and mail_watch.configured():
                 try: mail_watch.step(st, notify, log, crm)
                 except Exception as e: log("почта: сбой", str(e)[:120])
-            if hh_api and s.get("hhapi_on", True) and hh_api.configured():
-                try:
-                    hh_api.check_responses(st, notify, log)
-                    if not limited: hh_api.step(st, notify, log, s)
-                except Exception as e: log("hh.ru API: сбой", str(e)[:120])
             biz_file = os.path.join(BASE, "biz_tg.json")
             if s["cold_on"] and os.path.exists(biz_file):
                 try:
@@ -1926,7 +1956,7 @@ def main():
                     log("biz_tg.json не прочитан:", str(e)[:80])
 
             # ---- 4. поиск холодных — в паузах между отправками
-            if s["cold_on"] and sum(1 for x in st["cold_q"] if x.get("variant") not in ("BIZ", "PARTNER", "NICHE")) < 30:
+            if s["cold_on"] and sum(1 for x in st["cold_q"] if x.get("variant") not in ("BIZ", "PARTNER", "NICHE", "YT")) < 30:
                 if not frontier:
                     if not st.get("seeded"):
                         frontier.extend(s for s in SEEDS if s.lower() not in seen); st["seeded"] = True
