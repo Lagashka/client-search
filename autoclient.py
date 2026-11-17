@@ -200,7 +200,10 @@ def jsave(p, data):
     os.replace(tmp, p)
 
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True,   # 16.11: дожимы — свой лимит, не съедают новые письма
-            "biz_on": True, "partners_on": True, "niche_on": True, "yt_on": True, "limit_yt": 20, "mail_on": True}
+            "biz_on": True, "partners_on": True, "niche_on": True, "yt_on": True, "limit_yt": 20, "mail_on": True,
+            "yt_manual": True, "yt_mail_on": False, "limit_ytm": 10}
+# 17.11 v3: yt_manual — каждое письмо бота 5 сначала тебе с кнопками «✅ Отправить / ❌ Пропустить»;
+# yt_mail_on — эксперту без Telegram письмо на почту (с твоего адреса MAIL_USER, до limit_ytm в день), по умолчанию выключено
 # 17.11: бот hh.ru (hh_api) удалён по решению Егора; бот 5 «YouTube» — свой лимит limit_yt, не съедает лимит холодных
 _SC ={"m": None, "v": dict(DEFAULTS)}
 
@@ -1344,6 +1347,16 @@ def main():
                         False: "🛡 @SpamBot: на аккаунте ЕСТЬ ограничение ⛔",
                         None: "🛡 Не разобрал ответ @SpamBot — загляни в него вручную: https://t.me/SpamBot"}[ok]
                        + (f"\n\nОн пишет: «{cut(txt, 700)}»" if txt and ok is not True else ""))
+            elif cmd.get("cmd") in ("yt_ok", "yt_no"):            # бот 5, ручной режим: твоё решение по письму
+                it = (st.get("yt_wait") or {}).pop(cmd.get("key", ""), None)
+                if not it: notify("Это письмо уже обработано или устарело", silent=True)
+                elif cmd["cmd"] == "yt_no":
+                    bad.add(it["username"].lower()); log(f"YouTube: пропущен по решению Егора: {it['username']}")
+                elif it.get("mail"):
+                    st.setdefault("yt", {}).setdefault("mail_q", []).append(it); log(f"YouTube: одобрено письмо на почту {it['username']}")
+                else:
+                    it["ok"] = True; st["cold_q"].insert(0, it); log(f"YouTube: одобрено письмо @{it['username']}")
+                save()
             elif cmd.get("cmd") == "cleardraft":
                 try:
                     s_, info = web.open_chat(cmd["to"], st["sent"].get(cmd["to"], {}).get("peer"))
@@ -1610,6 +1623,11 @@ def main():
                             pn = e.get("pain") or {}
                             if pn.get("pain"):                            # что нейросеть поняла о нём ещё до диалога
                                 adv += f"\n\n🎯 Его боль: {pn['pain']}" + (f"\n✅ Что предложить: {pn['solution']}" if pn.get("solution") else "")
+                            if e.get("variant") == "YT" and verdict != crm.ST_REFUSED:   # бот 5: готовый тест и мини-разбор
+                                if e.get("best_url"):
+                                    adv += f"\n\n🎬 Пробный Shorts: на ПК запусти «Сделать тест Shorts.bat» и вставь {e['best_url']}"
+                                if e.get("audit"):
+                                    adv += "\n\n📄 Мини-разбор (отправь вместе с тестом):\n" + e["audit"]
                             notify(f"{head} {e.get('display', '')} (@{u})\n«{snippet}»{adv}{hold_note}\n\n{kind}: {e.get('source', '')}",
                                    buttons=btns)                          # сначала сразу уведомление — нейросеть его не задерживает
                             if analyst and s.get("advice_on", True):      # потом нейросеть разбирает ответ и предлагает, что написать
@@ -1740,7 +1758,7 @@ def main():
                     if kind == "fu":
                         e = st["sent"][item]
                         tm = e.pop("_tm", None)                        # t3 / t7 — касание после цены; иначе обычный дожим
-                        fu_txt = touch_text(e, tm) if tm else (autoreply.followup_message(e) or "")
+                        fu_txt = touch_text(e, tm) if tm else (e.get("fu_alt") or autoreply.followup_message(e) or "")   # бот 5: другой факт о канале
                         if not tm and (not fu_txt or human.looks_bot(human.humanize(fu_txt))): fu_txt = followup_text(e)   # ИИ-дожим «как бот» → шаблон
                         fu_txt = human.humanize(fu_txt)
                         try: r = web.send_followup(item, e["peer"], fu_txt, known_out=e.get("n_out", 1))
@@ -1800,6 +1818,8 @@ def main():
                                 "source": item.get("post") or item.get("source"), "text": item["text"],
                                 "pain": item.get("pain") or {},
                                 "n_out": getattr(web, "last_parts", 1) or 1}
+                            for k_ in ("fu_alt", "ab", "audit", "best_url", "plat"):     # бот 5: второе письмо, A/B, мини-разбор
+                                if item.get(k_): st["sent"][item["username"]][k_] = item[k_]
                             crm_sync()
                             log(f"ОТПРАВЛЕНО [{'вакансия' if kind == 'hot' else 'холодное'}] @{item['username']} — сегодня: "
                                 f"вакансии {d['hot']}/{s['limit_hot']}, холодные {d['cold']}/{s['limit_cold']}, "
@@ -1924,18 +1944,52 @@ def main():
                     log("поиск мастеров не удался:", str(e)[:120])
                 save()
             # ---- 3c-ter. бот 5 «YouTube»: эксперты с живыми каналами → письмо в Telegram, только у кого есть Telegram (17.11)
-            if s.get("yt_on", True) and yt_hunt and now - st.get("yt_ts", 0) > 15 * 60 and nq("YT") < 25:
+            yw = st.setdefault("yt_wait", {})
+            for k_ in [k for k, v in yw.items() if now - v.get("found", now) > 3 * 86400]: yw.pop(k_)     # без ответа 3 дня — забыть
+            if s.get("yt_on", True) and yt_hunt and now - st.get("yt_ts", 0) > 15 * 60 and nq("YT") + len(yw) < 25 and len(yw) < 12:
                 st["yt_ts"] = now
-                live(phase="ищу экспертов на YouTube")
+                live(phase="ищу экспертов на YouTube и RuTube")
                 try:
-                    skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u)
+                    skip = lambda u: u.lower() in contacted or u.lower() in bad or not mine(u) or u.lower() in st.get("sent_mail", {})
                     for item in yt_hunt.yt_step(st.setdefault("yt", {}), skip=skip):
-                        st["cold_q"].insert(min(1, len(st["cold_q"])), item)
                         contacted.add(item["username"].lower())
                         st.setdefault("health", {}).setdefault("YT", {})["found"] = now
-                        log(f"YouTube-эксперт в очередь Telegram: @{item['username']} ({item.get('display', '')}) ← {item.get('source', '')}")
+                        if item.get("mail") and not s.get("yt_mail_on", False):
+                            log(f"YouTube: у эксперта только почта, а письма на почту выключены — пропускаю ({item.get('source', '')})"); continue
+                        if s.get("yt_manual", True):          # п. 19: сначала тебе, отправка — только по кнопке
+                            key = format(zlib.crc32(item["username"].lower().encode()), "x")
+                            yw[key] = item
+                            pn = item.get("pain") or {}
+                            notify(f"🎥 5️⃣ {item.get('plat', 'YouTube')}: нашёл эксперта (балл {item.get('score', 0)})\n"
+                                   f"{item.get('display', '')} {'📧 ' + item['mail'] if item.get('mail') else '@' + item['username']}\n"
+                                   f"{item.get('source', '')}\n🎯 {pn.get('pain', '')}\n\n✉️ Письмо:\n{item['text']}\n\n"
+                                   f"🔁 Через 2 дня, если промолчит:\n{item.get('fu_alt', '')}",
+                                   buttons=[[{"text": "✅ Отправить", "callback_data": f"yt:ok:{key}"},
+                                             {"text": "❌ Пропустить", "callback_data": f"yt:no:{key}"}],
+                                            [{"text": "📺 Открыть канал", "url": item.get("source") or "https://youtube.com"}]])
+                        elif item.get("mail"):
+                            st["yt"].setdefault("mail_q", []).append(item)
+                        else:
+                            st["cold_q"].insert(min(1, len(st["cold_q"])), item)
+                        log(f"YouTube-эксперт найден: {item['username']} ({item.get('display', '')}) ← {item.get('source', '')}"
+                            f"{' — жду твоего решения' if s.get('yt_manual', True) else ''}")
                 except Exception as e:
                     log("поиск на YouTube не удался:", str(e)[:120])
+                save()
+            # ---- 3c-quater. бот 5: письма на почту экспертам без Telegram (только если включено и почта подключена)
+            mq = (st.get("yt") or {}).get("mail_q") or []
+            if (mq and yt_hunt and s.get("yt_mail_on", False) and in_hours(HOURS_COLD) and not limited
+                    and d.get("ytm", 0) < int(s.get("limit_ytm", 10)) and now - st.get("ytm_ts", 0) > 20 * 60):
+                it = mq.pop(0); st["ytm_ts"] = now
+                try: r = yt_hunt.send_mail(it["mail"], "Shorts для вашего канала", yt_hunt.mail_body(it))
+                except Exception as ex: r = "fail:" + str(ex)[:80]
+                if r == "sent":
+                    d["ytm"] = d.get("ytm", 0) + 1
+                    st.setdefault("sent_mail", {})[it["mail"].lower()] = {"ts": now, "date": today(), "source": it.get("source"),
+                                                                           "ab": it.get("ab"), "display": it.get("display")}
+                    log(f"ОТПРАВЛЕНО [почта, YouTube] {it['mail']} — сегодня {d['ytm']}/{s.get('limit_ytm', 10)}")
+                else:
+                    log(f"письмо на почту не ушло ({it['mail']}): {r}")
                 save()
             # ---- 3d. почта (раз в 10 мин)
             if mail_watch and s.get("mail_on", True) and mail_watch.configured():
