@@ -75,7 +75,12 @@ check("нет компаний — остальные идут без пауз",
 st = world(n_hot=0); got, _, _ = run(st, S, 12)
 check("нет вакансий — холодные и дожимы всё равно идут", got["hot"] == 0 and got["BIZ"] > 0 and got["fu"] > 0)
 got, _, _ = run(world(), S, 20, warm=True, lim_hot=100)
-check("мягкий режим после ограничения: только вакансии", got["hot"] == 20 and sum(got.values()) == 20)
+check("мягкий режим после ограничения: только вакансии и мастера (17.11)",
+      got["hot"] > 0 and got["NICHE"] > 0 and got["hot"] + got["NICHE"] == sum(got.values()) == 20)
+# 17.11 тест бота 5: всё выключено, кроме мастеров, мягкий режим — пишут только мастера
+only = dict(S, hot_on=False, biz_on=False, partners_on=False, cold_on=False, niche_on=True)
+got, _, _ = run(world(), only, 10, warm=True, lim_hot=100)
+check("тест бота 5: в мягком режиме пишут только «Мастера»", got["NICHE"] > 0 and got["NICHE"] == sum(got.values()))
 st = world(); st["hot_q"][0]["found"] = NOW - 49 * 3600; run(st, S, 1)
 check("вакансии старше 48 ч выбрасываются", all(NOW - x["found"] < 48 * 3600 for x in st["hot_q"]))
 
