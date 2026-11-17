@@ -16,17 +16,18 @@ def check(name, cond):
 NOW = time.time()
 S = dict(c.DEFAULTS)
 
-def world(n_hot=200, n_biz=30, n_par=30, n_exp=30, silent=20, n_nic=30):
+def world(n_hot=200, n_biz=30, n_par=30, n_exp=30, silent=20, n_nic=30, n_yt=30):
     """Как в облаке: вакансий всегда больше, чем успеваем отправить, все очереди полны, есть молчуны для дожимов."""
     hot = [{"username": f"vac{i}", "found": NOW - 60, "text": "x"} for i in range(n_hot)]
     cold = ([{"username": f"biz{i}", "variant": "BIZ", "found": NOW} for i in range(n_biz)] +
             [{"username": f"par{i}", "variant": "PARTNER", "found": NOW} for i in range(n_par)] +
-            [{"username": f"nic{i}", "variant": "NICHE", "found": NOW} for i in range(n_nic)] +      # 17.11: бот 5 «Мастера»
+            [{"username": f"nic{i}", "variant": "NICHE", "found": NOW} for i in range(n_nic)] +      # 17.11: бот 4 «Мастера»
+            [{"username": f"yt{i}", "variant": "YT", "found": NOW} for i in range(n_yt)] +          # 17.11: бот 5 «YouTube»
             [{"username": f"exp{i}", "variant": "A", "found": NOW} for i in range(n_exp)])
     sent = {f"old{i}": {"kind": "hot", "ts": NOW - 30 * 3600, "peer": 1} for i in range(silent)}
     return {"hot_q": hot, "cold_q": cold, "sent": sent}
 
-def day(): return {"hot": 0, "cold": 0, "fu": 0, "by": {}}
+def day(): return {"hot": 0, "cold": 0, "fu": 0, "yt": 0, "by": {}}
 
 def run(st, s, ticks, d=None, warm=False, lim_hot=None):
     """Имитация отправки: plan_send → «отправлено» → как в autoclient (pop q[0], счётчики)."""
@@ -41,22 +42,23 @@ def run(st, s, ticks, d=None, warm=False, lim_hot=None):
             q = st["hot_q"] if kind == "hot" else st["cold_q"]
             check_item = q.pop(0)
             assert check_item is item, "отправка взяла не то письмо, что выбрал планировщик"
-            d[kind] += 1; sl = c.slot_of(item, kind)
+            c.count_sent(d, item, kind); sl = c.slot_of(item, kind)
         got[sl] += 1; seq.append(sl)
     return got, seq, d
 
 print("1. Главная осечка: очередь вакансий никогда не пустеет")
-got, seq, _ = run(world(), S, 20)
-check("за 20 отправок письмо получил каждый бот: вакансии, компании, партнёры, эксперты, дожимы",
-      all(got[k] > 0 for k in ("hot", "BIZ", "PARTNER", "NICHE", "cold", "fu")))
+got, seq, _ = run(world(), S, 21)
+check("за 21 отправку письмо получил каждый бот: вакансии, компании, партнёры, мастера, YouTube, эксперты, дожимы",
+      all(got[k] > 0 for k in ("hot", "BIZ", "PARTNER", "NICHE", "YT", "cold", "fu")))
 check("ни один бот не получает больше 2 отправок из 5 подряд (честный круг)",
-      all(collections.Counter(seq[i:i + 5]).most_common(1)[0][1] <= 2 for i in range(0, 15)))
-check("первые 6 отправок — по одной от каждого бота", sorted(seq[:6]) == sorted(c.SLOTS))
+      all(collections.Counter(seq[i:i + 5]).most_common(1)[0][1] <= 2 for i in range(0, 16)))
+check("первые 7 отправок — по одной от каждого бота", sorted(seq[:7]) == sorted(c.SLOTS))
 
 print("2. Лимиты в день")
-s2 = dict(S, limit_hot=40, limit_cold=8, limit_fu=3)
+s2 = dict(S, limit_hot=40, limit_cold=8, limit_fu=3, limit_yt=5)
 got, seq, d = run(world(), s2, 200)
-check("холодных (2+3+5+эксперты) ровно limit_cold", d["cold"] == 8)
+check("холодных (2+3+4+эксперты) ровно limit_cold", d["cold"] == 8)
+check("YouTube — свой лимит limit_yt и не съедает limit_cold", d["yt"] == 5 and got["YT"] == 5)
 check("дожимов ровно limit_fu", d["fu"] == 3)
 check("лимит холодных поделён между ботами 2, 3, 5 и экспертами поровну", got["BIZ"] == got["PARTNER"] == got["NICHE"] == got["cold"] == 2)
 check("вакансии не превышают limit_hot", d["hot"] == 40)
@@ -75,12 +77,15 @@ check("нет компаний — остальные идут без пауз",
 st = world(n_hot=0); got, _, _ = run(st, S, 12)
 check("нет вакансий — холодные и дожимы всё равно идут", got["hot"] == 0 and got["BIZ"] > 0 and got["fu"] > 0)
 got, _, _ = run(world(), S, 20, warm=True, lim_hot=100)
-check("мягкий режим после ограничения: только вакансии и мастера (17.11)",
-      got["hot"] > 0 and got["NICHE"] > 0 and got["hot"] + got["NICHE"] == sum(got.values()) == 20)
-# 17.11 тест бота 5: всё выключено, кроме мастеров, мягкий режим — пишут только мастера
-only = dict(S, hot_on=False, biz_on=False, partners_on=False, cold_on=False, niche_on=True)
-got, _, _ = run(world(), only, 10, warm=True, lim_hot=100)
-check("тест бота 5: в мягком режиме пишут только «Мастера»", got["NICHE"] > 0 and got["NICHE"] == sum(got.values()))
+check("мягкий режим после ограничения: только вакансии, мастера и YouTube (17.11)",
+      got["hot"] > 0 and got["NICHE"] > 0 and got["YT"] > 0 and got["hot"] + got["NICHE"] + got["YT"] == sum(got.values()) == 20)
+# 17.11 тест ботов 4 и 5: всё выключено, кроме мастеров и YouTube, мягкий режим — пишут только они
+only = dict(S, hot_on=False, biz_on=False, partners_on=False, cold_on=False, niche_on=True, yt_on=True, limit_cold=10, limit_yt=20)
+got, _, d = run(world(n_nic=40, n_yt=40), only, 60, warm=True, lim_hot=100)
+check("тест 4+5: в мягком режиме пишут только «Мастера» и «YouTube»", got["NICHE"] > 0 and got["YT"] > 0 and got["NICHE"] + got["YT"] == sum(got.values()))
+check("тест 4+5: мастеров 10 в день, YouTube 20 в день", got["NICHE"] == 10 and got["YT"] == 20)
+got, _, _ = run(world(), dict(only, yt_on=False), 10, warm=True, lim_hot=100)
+check("YouTube выключен в пульте — пишут только мастера", got["YT"] == 0 and got["NICHE"] == sum(got.values()) > 0)
 st = world(); st["hot_q"][0]["found"] = NOW - 49 * 3600; run(st, S, 1)
 check("вакансии старше 48 ч выбрасываются", all(NOW - x["found"] < 48 * 3600 for x in st["hot_q"]))
 
