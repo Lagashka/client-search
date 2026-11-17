@@ -45,24 +45,73 @@ check("школа/курс — не эксперт", not y.is_expert("Школа
 check("монтажёр-конкурент — не эксперт", not y.is_expert("Видеомонтаж для вас", "пишите", []))
 check("эксперт с консультациями — да", y.is_expert("Анна Петрова | психолог", "Записаться на консультацию", []))
 
+print("разбор канала (боль по открытым цифрам)")
+import datetime as dt
+NOW = dt.datetime(2026, 11, 17, tzinfo=dt.timezone.utc)
+def V(days, views, shorts=False, title="Как купить квартиру в ипотеку", i=[0]):
+    i[0] += 1
+    return {"id": f"v{i[0]}", "title": title, "when": NOW - dt.timedelta(days=days), "desc": "", "shorts": shorts, "views": views}
+dead = [V(40, 1000), V(50, 900), V(60, 800)]
+check("последнее видео 40 дней назад — мёртвый, не пишем", y.analyze(dead, 5000, [], NOW).get("skip") == "мёртвый канал")
+check("2 видео за 60 дней — редко, не пишем", y.analyze([V(5, 500), V(70, 500), V(90, 500)], 5000, [], NOW).get("skip") == "редко выходят видео")
+longs = [V(4, 1200), V(10, 900), V(17, 5000, title="Ипотека для семей"), V(24, 1000), V(31, 1100)]
+a = y.analyze(longs, 8000, [], NOW)
+check("длинные есть, Shorts нет вообще → no_shorts, never", a.get("kind") == "no_shorts" and a.get("never"))
+check("лучшее видео найдено (5000 при обычных ~1100)", a.get("best", {}).get("views") == 5000 and a["best"]["x"] >= 4)
+offt = longs[:2] + [V(17, 9000, title="АСМР звуки рта")] + longs[3:]
+a = y.analyze(offt, 8000, [], NOW, on_topic=lambda v: bool(y.topic(v["title"])))
+check("лучшее видео не по теме (АСМР) не берём", "АСМР" not in (a.get("best") or {}).get("title", ""))
+a = y.analyze(longs, 8000, [300, 200], NOW)
+check("Shorts были давно, за месяц ни одного → no_shorts, не never", a.get("kind") == "no_shorts" and not a.get("never"))
+weak = [V(4, 1500), V(5, 150, True), V(8, 120, True), V(11, 1400), V(12, 90, True), V(15, 1300)]
+a = y.analyze(weak, 6000, [150, 120, 90], NOW)
+check("Shorts ~120 при длинных ~1400 → weak_shorts", a.get("kind") == "weak_shorts" and a["med_short"] == 120)
+good = [V(d, 3000, True) for d in (3, 5, 7, 9, 11, 13)] + [V(d, 2500) for d in (4, 8, 12)]
+check("Shorts набирают хорошо → не пишем (монтаж и так в порядке)", y.analyze(good, 6000, [3000] * 6, NOW).get("skip"))
+drop = [V(d, v, True) for d, v in ((3, 400), (5, 350), (7, 380), (10, 1500), (13, 1400), (16, 1600), (19, 1500))]
+a = y.analyze(drop, 3000, [400, 350, 380, 1500, 1400, 1600, 1500], NOW)
+check("последние Shorts 380 против 1500 раньше → drop", a.get("kind") == "drop" and a.get("of") == "shorts")
+check("свежие (младше 3 дней) не тянут вниз", y.analyze([V(1, 5)] + good[1:], 6000, [3000] * 6, NOW).get("skip"))
+
+print("график пересмотров")
+h = [1.0, .5, .4, .35, .3] + [.3] * 30 + [.9, 1.0, .9] + [.25] * 52 + [.1] * 10
+hp = y.heat_points(h, 600)
+check("самый пересматриваемый момент найден (~3:36)", hp and 200 <= hp["peak"] <= 230)
+check("короткое видео (<60 с) — не разбираем", y.heat_points(h, 40) is None)
+check("нет графика — None", y.heat_points(None, 600) is None)
+check("числа как на глаз: 4720 → 4,7 тыс., 343 → 340, 25000 → 25 тыс.", y.num(4720) == "4,7 тыс." and y.num(343) == "340" and y.num(25000) == "25 тыс.")
+
 print("письмо")
-cases = [dict(who="Павел Петров", title="Риелтор Павел", desc="продаю квартиры", video="Как купить квартиру в ипотеку", has_shorts=False),
-         dict(who="", title="Юрист Иванов", desc="банкротство физлиц", video="Очень длинное название видео про банкротство физических лиц 2026", has_shorts=True),
-         dict(who="Anna", title="Психолог", desc="", video="", has_shorts=False)]
-for i in range(30):
-    c = cases[i % 3]; t = y.template(dict(c))
-    if i < 3: print("   ", t.replace("\n", " ⏎ "))
-    if human.looks_bot(t) or "http" in t or "₽" in t or t.count("?") != 1 or len(t.split("\n")) != 2 or "бесплат" in t.lower():
-        check(f"письмо {i} как человек, 2 строки, один вопрос, без ссылок и цен: {t!r} → {human.looks_bot(t)}", False); break
+an_no = y.analyze(longs, 8000, [], NOW)
+an_weak = y.analyze(weak, 6000, [150, 120, 90], NOW)
+an_drop = y.analyze(drop, 3000, [400, 350, 380, 1500], NOW)
+an_heat = dict(an_no, heat={"peak": 215, "peak_x": 3.1, "drop": 40})
+cases = [dict(who="Павел Петров", title="Риелтор Павел", desc="продаю квартиры", video="Как купить квартиру в ипотеку", an=an_no),
+         dict(who="", title="Юрист Иванов", desc="банкротство физлиц", video="Очень длинное название видео про банкротство физических лиц 2026", an=an_weak),
+         dict(who="Anna", title="Психолог", desc="", video="", an=an_drop),
+         dict(who="Ольга", title="Ипотечный брокер", desc="", video="Ипотека для семей", an=an_heat)]
+for i in range(40):
+    c = cases[i % 4]; t = y.template(dict(c))
+    if i < 4: print("   ", t.replace("\n", " ⏎ "))
+    if human.looks_bot(t.replace("\n", "\n\n")) or "http" in t or "₽" in t or t.count("?") != 1 or len(t.split("\n")) != 3 or "бесплат" in t.lower():
+        check(f"письмо {i} как человек, 3 строки, один вопрос, без ссылок и цен: {t!r} → {human.looks_bot(t)}", False); break
 else:
-    check("30 писем: как человек, 2 строки, один вопрос, без ссылок, цен и «бесплатно»", True)
+    check("40 писем: как человек, 3 строки (боль, решение, кнопка), один вопрос, без ссылок, цен и «бесплатно»", True)
 t = y.template(dict(cases[0]))
-check("короткое название видео попало в письмо", "«Как купить квартиру в ипотеку»" in t)
+check("no_shorts: боль названа («Shorts на канале нет совсем»)", "Shorts на канале нет совсем" in t)
+check("золотая кнопка: пробный Shorts на 15 секунд из их видео", "пробный Shorts на 15 секунд" in t and "Прислать?" in t)
+check("лучшее видео названо с цифрой «в 4 раза» / «в 5 раз»", "«Ипотека для семей»" in t and re.search(r"в \d+ раза? больше обычного", t))
 t = y.template(dict(cases[1]))
-check("длинное название заменено на тему («про банкротство»)", "про банкротство" in t and "«" not in t)
-check("с Shorts не спрашиваем «нарезаете ли Shorts»", all("Shorts из длинных видео нарезаете" not in y.template(dict(cases[1])) for _ in range(20)))
-it = y.item_of(dict(cases[0], username="pavel_r", source="https://www.youtube.com/channel/X", subs=1000, text=t))
-check("письмо в очередь: variant YT, без «боли», абзацы через пустую строку", it["variant"] == "YT" and it["pain"] == {} and "\n\n" in it["text"])
+check("weak_shorts: цифры Shorts против длинных", "Shorts у вас набирают около 120 просмотров" in t and "1,4 тыс" in t)
+check("длинное название видео не цитируется", "Очень длинное" not in t)
+t = y.template(dict(cases[2]))
+check("drop: «последние Shorts набирают около 380, а до этого около 1,5 тыс.»", "около 380" in t and "1,5 тыс" in t)
+check("«Ипотечный брокер» → про ипотеку", y.topic("Ипотечный брокер") == "про ипотеку")
+t = y.template(dict(cases[3]))
+check("график есть: «самый пересматриваемый момент на 3:35»", "самый пересматриваемый момент на 3:35" in t)
+it = y.item_of(dict(cases[0], username="pavel_r", source="https://www.youtube.com/channel/X", subs=8000, text=t))
+check("в очередь: variant YT, боль+решение для уведомления (нейросеть не дописывает), абзацы через пустую строку",
+      it["variant"] == "YT" and it["pain"].get("pain") and it["pain"].get("solution") and "\n\n" in it["text"])
 
 print(f"\nИтого: {ok} прошло, {bad} провалено")
 sys.exit(1 if bad else 0)
