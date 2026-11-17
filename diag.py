@@ -30,7 +30,8 @@ print("DIAG", json.dumps({
     "want": jl("bot-control.json", {}).get("want"),
     "biz_companies": dict(collections.Counter(c.get("status") for c in ((st.get("biz") or {}).get("companies") or {}).values())),
     "partners": {k: len((st.get("partners") or {}).get(k) or []) for k in ("frontier", "boards", "pending", "seen")},
-    "youtube": {k: len((st.get("yt") or {}).get(k) or []) for k in ("frontier", "pending", "seen")},
+    "youtube": dict({k: len((st.get("yt") or {}).get(k) or []) for k in ("frontier", "pending", "seen")},
+                    why=(st.get("yt") or {}).get("why") or {}),     # причины отсева и найденные боли — только счёт
     "mail": {"connected": bool((st.get("mail") or {}).get("init"))},
     "last_kind": st.get("last_kind"),
     "health_h_ago": {k: {f: round((datetime.datetime.now().timestamp() - v[f]) / 3600, 1) for f in ("sent", "found", "since") if v.get(f)}
