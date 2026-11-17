@@ -1347,16 +1347,25 @@ def main():
                         False: "🛡 @SpamBot: на аккаунте ЕСТЬ ограничение ⛔",
                         None: "🛡 Не разобрал ответ @SpamBot — загляни в него вручную: https://t.me/SpamBot"}[ok]
                        + (f"\n\nОн пишет: «{cut(txt, 700)}»" if txt and ok is not True else ""))
-            elif cmd.get("cmd") in ("yt_ok", "yt_no"):            # бот 5, ручной режим: твоё решение по письму
-                it = (st.get("yt_wait") or {}).pop(cmd.get("key", ""), None)
-                if not it: notify("Это письмо уже обработано или устарело", silent=True)
-                elif cmd["cmd"] == "yt_no":
-                    bad.add(it["username"].lower()); log(f"YouTube: пропущен по решению Егора: {it['username']}")
-                elif it.get("mail"):
-                    st.setdefault("yt", {}).setdefault("mail_q", []).append(it); log(f"YouTube: одобрено письмо на почту {it['username']}")
-                else:
-                    it["ok"] = True; st["cold_q"].insert(0, it); log(f"YouTube: одобрено письмо @{it['username']}")
+            elif cmd.get("cmd") in ("yt_ok", "yt_no", "yt_edit", "yt_ok_all"):   # бот 5, ручной режим: твоё решение по письму
+                keys = cmd.get("keys") or [cmd.get("key", "")]
+                for key in keys:
+                    it = (st.get("yt_wait") or {}).pop(key, None)
+                    if not it:
+                        if cmd["cmd"] != "yt_ok_all": notify("Это письмо уже обработано или устарело", silent=True)
+                        continue
+                    if cmd["cmd"] == "yt_no":
+                        bad.add(it["username"].lower()); log(f"YouTube: пропущен по решению Егора: {it['username']}"); continue
+                    if cmd["cmd"] == "yt_edit" and (cmd.get("text") or "").strip():
+                        it["text"] = re.sub(r"\s*\n\s*\n\s*", "\n\n", cmd["text"].strip()); it["pain"] = it.get("pain") or {}
+                        it["ab"] = (it.get("ab") or "?:") + ".edit"               # A/B: письма, исправленные Егором
+                    if it.get("mail"):
+                        st.setdefault("yt", {}).setdefault("mail_q", []).append(it); log(f"YouTube: одобрено письмо на почту {it['username']}")
+                    else:
+                        it["ok"] = True; st["cold_q"].insert(0, it); log(f"YouTube: одобрено письмо @{it['username']}")
                 save()
+            elif cmd.get("cmd") == "update":                    # «🔄 Обновить бота»: сохраниться и выйти, следующий запуск — свежий код
+                st["restart_now"] = 1; save(); log("облако: перезапуск по кнопке «Обновить бота»")
             elif cmd.get("cmd") == "cleardraft":
                 try:
                     s_, info = web.open_chat(cmd["to"], st["sent"].get(cmd["to"], {}).get("peer"))
@@ -1443,8 +1452,8 @@ def main():
             process_inbox()
             if CLOUD:
                 web.tick_bot()                              # кнопки пульта обрабатываются здесь же
-                if time.time() - T0 > CLOUD_RUN_LIMIT:
-                    log("облако: плановое завершение, состояние сохраняется"); break
+                if time.time() - T0 > CLOUD_RUN_LIMIT or st.pop("restart_now", None):
+                    log("облако: завершение (плановое или «Обновить бота»), состояние сохраняется"); save(); break
                 if not web.want():
                     live(phase="выключен кнопкой ⏹", why="нажми ▶️ Запустить", next_send=0)
                     time.sleep(3); continue
@@ -1711,8 +1720,9 @@ def main():
                 st["limited_until"] = ""; st["spam_check"] = ""    # перед первым сообщением — снова спросить @SpamBot
                 st.setdefault("warm_from", datetime.datetime.now().isoformat()); save()
             # 3 дня после ограничения — мягкий разгон: мало откликов, длинные паузы, без холодных и дожимов
-            warm = bool(st.get("warm_from")) and (datetime.datetime.now() - datetime.datetime.fromisoformat(st["warm_from"])).days < WARM_DAYS
-            if st.get("warm_from") and not warm: st.pop("warm_from", None)
+            warm_raw = bool(st.get("warm_from")) and (datetime.datetime.now() - datetime.datetime.fromisoformat(st["warm_from"])).days < WARM_DAYS
+            if st.get("warm_from") and not warm_raw: st.pop("warm_from", None)
+            warm = warm_raw and not s.get("warm_off")     # 17.11: Егор может снять мягкий режим кнопкой в «⚙️ Ещё» (на свой риск)
             # 16.11 (Егор: «делай»): лимит холодных стоял на 0 — боты 2–3 молчали. Один раз, когда ограничение и мягкий режим
             # позади: 0 → 10 в день (не больше: жалобы на рассылку). Если Егор сам поставил своё число — не трогаем.
             if not warm and not (st["limited_until"] and st["limited_until"] > datetime.datetime.now().isoformat()) \
@@ -1731,6 +1741,16 @@ def main():
                 jsave(SETTINGS, cur); s = S(); st["masters_only_done"] = today(); st["cold10_done"] = today(); save()
                 notify("🧪 Тест ботов 4 и 5: пишут только «Мастера» (до 10 в день) и «YouTube» (до 20 в день), сразу после снятия "
                        "ограничения. Отклики на вакансии, компании, партнёры и холодные экспертам выключены — включить в пульте.", silent=True)
+            # 17.11 вечер (Егор: «запусти всех ботов»): тест «только 4 и 5» окончен — один раз включаем все боты.
+            # Мягкий режим после бана остаётся (компании, партнёры и холодные экспертам ждут его конца), снять — «⚙️ Ещё».
+            if st.get("masters_only_done") and not st.get("all_on_1711"):
+                cur = jload(SETTINGS, {})
+                cur.update(hot_on=True, cold_on=True, biz_on=True, partners_on=True, niche_on=True, yt_on=True, fu_on=True,
+                           advice_on=True, pain_on=True)
+                jsave(SETTINGS, cur); s = S(); st["all_on_1711"] = today(); save()
+                notify("🚀 Все боты включены: 1 вакансии + эксперты, 2 компании, 3 партнёры, 4 мастера, 5 YouTube, дожимы."
+                       + ("\n🟡 Пока идёт мягкий режим после бана, пишут вакансии, мастера и YouTube, остальные подключатся после него."
+                          if warm else ""), silent=True)
             lim_hot = min(int(s["limit_hot"]), WARM_HOT) if warm else int(s["limit_hot"])
             gap = lambda: max(WARM_GAP if warm else 10, int(s["gap"])) * random.uniform(1.0, 1.15)
             if now >= next_send and not limited:
