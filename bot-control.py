@@ -33,22 +33,22 @@ NO_WINDOW = 0x08000000
 REPORT_HOUR = 21          # итог дня — в 21:00 по времени компьютера
 WATCHDOG_MIN = 20         # нет признаков жизни столько минут — перезапуск поиска
 DEFAULTS = {"gap": 30, "limit_hot": 40, "limit_cold": 20, "limit_fu": 8, "hot_on": True, "cold_on": True, "fu_on": True, "autoreply": True,
-            "biz_on": True, "partners_on": True, "niche_on": True, "hhapi_on": True, "mail_on": True, "limit_hhapi": 20}
+            "biz_on": True, "partners_on": True, "niche_on": True, "yt_on": True, "limit_yt": 20, "mail_on": True}
 
 B_START, B_STOP = "▶️ Запустить", "⏹ Остановить"
 B_STATUS, B_REPLIES, B_SENT = "📊 Статус", "💬 Ответы", "📤 Отправленные"
 B_SETTINGS, B_LOG, B_RESTART = "⚙️ Настройки", "📝 Лог", "♻️ Перезапуск"
 B_BASE = "🗂 База лидов"
-B_BOTS = "🤖 Боты 1·2·3"
+B_BOTS = "🤖 Боты 1–5"
 B_ANALYZE = "🧠 Разбор"
 B_ALL = "🚀 Запустить все боты"
 BOTS = [("hot_on", "1️⃣ Вакансии", "отклики на вакансии в Telegram-каналах"),
+        ("cold_on", "1️⃣ ❄️ Эксперты", "холодные письма экспертам с Telegram-каналами (часть бота 1)"),
         ("biz_on", "2️⃣ Компании", "бизнесы с hh.ru и 2ГИС → личное сообщение"),
         ("partners_on", "3️⃣ Партнёры", "SMM-специалисты, таргетологи, агентства → партнёрство"),
-        ("niche_on", "5️⃣ Мастера", "владельцы каналов: стройка и ремонт, авто, премиум-ремесло → короткое письмо"),
-        ("hhapi_on", "4️⃣ hh.ru", "сам откликается на вакансии hh.ru (20 в день) и следит за приглашениями"),
-        ("mail_on", "📧 Почта", "видит письма клиентов и hh.ru, останавливает дожимы ответившим"),
-        ("cold_on", "❄️ Эксперты", "холодные письма экспертам с каналами"),
+        ("niche_on", "4️⃣ Мастера", "владельцы каналов: стройка и ремонт, авто, премиум-ремесло → короткое письмо"),
+        ("yt_on", "5️⃣ YouTube", "эксперты с живыми YouTube-каналами → письмо в Telegram (только у кого он есть)"),
+        ("mail_on", "📧 Почта", "видит письма клиентов, останавливает дожимы ответившим"),
         ("fu_on", "🔁 Дожимы", "одно напоминание тем, кто молчит")]
 KEYBOARD = {"keyboard": [[{"text": B_ALL}],
                          [{"text": B_START}, {"text": B_STOP}, {"text": B_BOTS}],
@@ -248,9 +248,10 @@ def fmt_status(ctl):
         lines.append(f"⛔ Отправка на паузе до {lim[11:16]} {lim[8:10]}.{lim[5:7]} (защита аккаунта), поиск идёт")
     lines += [f"\nСегодня ({today[8:10]}.{today[5:7]}):" if today else "\nСегодня:",
               f"• откликов на вакансии: {d.get('hot', 0)} из {s['limit_hot']}",
-              f"• холодных: {d.get('cold', 0)} из {s['limit_cold']}, дожимов: {d.get('fu', 0)} из {s['limit_fu']}",
+              f"• холодных: {d.get('cold', 0)} из {s['limit_cold']}, YouTube: {d.get('yt', 0)} из {s.get('limit_yt', 20)}, "
+              f"дожимов: {d.get('fu', 0)} из {s['limit_fu']}",
               "• по ботам: " + " · ".join(f"{n} {(d.get('by') or {}).get(k, 0)}" for k, n in
-                                          (("hot", "1️⃣"), ("BIZ", "2️⃣"), ("PARTNER", "3️⃣"), ("NICHE", "5️⃣"), ("cold", "❄️"), ("fu", "🔁"))),
+                                          (("hot", "1️⃣"), ("cold", "❄️"), ("BIZ", "2️⃣"), ("PARTNER", "3️⃣"), ("NICHE", "4️⃣"), ("YT", "5️⃣"), ("fu", "🔁"))),
               f"• ответили: {len(rep_today)} (🔥 {sum(1 for e in rep_today if e.get('outcome') != 'no')}, "
               f"❌ {sum(1 for e in rep_today if e.get('outcome') == 'no')})",
               f"\nОчередь: вакансий {len(st.get('hot_q', []))}, холодных {len(st.get('cold_q', []))}",
@@ -299,6 +300,7 @@ def render(what, ctl):
     return "?", None
 
 GAPS, HOTS, COLDS, FUS = [30, 60, 90, 180, 300], [25, 40, 60, 100], [0, 10, 20, 40], [0, 5, 8, 15]
+YTS = [0, 10, 20, 30]
 
 def render_settings():
     s = settings()
@@ -307,7 +309,8 @@ def render_settings():
     text = ("⚙️ Настройки — меняются сразу, без перезапуска\n\n"
             f"⏱ Пауза между сообщениями: {s['gap']} с\n"
             f"📈 Откликов на вакансии в день: {s['limit_hot']}\n"
-            f"❄️ Новых холодных (эксперты, компании, партнёры) в день: {s['limit_cold']}\n"
+            f"❄️ Новых холодных (эксперты, компании, партнёры, мастера) в день: {s['limit_cold']}\n"
+            f"5️⃣ Писем с YouTube в день (отдельный лимит): {s.get('limit_yt', 20)}\n"
             f"🔁 Дожимов и касаний в день: {s['limit_fu']}\n"
             f"Вакансии {onoff('hot_on')} · Холодные {onoff('cold_on')} · Дожимы {onoff('fu_on')}\n\n"
             "⚠️ Чем чаще и больше сообщений незнакомым, тем выше риск, что Telegram ограничит аккаунт.")
@@ -317,6 +320,8 @@ def render_settings():
           [{"text": mark(s["limit_hot"], v), "callback_data": f"set:limit_hot:{v}"} for v in HOTS],
           [{"text": "❄️ холодных в день:", "callback_data": "noop"}],
           [{"text": mark(s["limit_cold"], v), "callback_data": f"set:limit_cold:{v}"} for v in COLDS],
+          [{"text": "5️⃣ YouTube в день:", "callback_data": "noop"}],
+          [{"text": mark(s.get("limit_yt", 20), v), "callback_data": f"set:limit_yt:{v}"} for v in YTS],
           [{"text": "🔁 дожимов в день:", "callback_data": "noop"}],
           [{"text": mark(s["limit_fu"], v), "callback_data": f"set:limit_fu:{v}"} for v in FUS],
           [{"text": f"Вакансии {onoff('hot_on')}", "callback_data": "tog:hot_on"},
@@ -330,7 +335,8 @@ def render_bots():
     s = settings()
     lines = [f"{'🟢' if s.get(k, True) else '⚪️'} {name} — {about}" for k, name, about in BOTS]
     text = ("🤖 Боты — нажми, чтобы включить или выключить. Действует сразу, в облаке.\n\n" + "\n".join(lines) +
-            f"\n\nЛимиты в день: вакансии {s['limit_hot']}, компании+партнёры+эксперты {s['limit_cold']}, дожимы {s['limit_fu']} (меняются в ⚙️ Настройки).\n"
+            f"\n\nЛимиты в день: вакансии {s['limit_hot']}, эксперты+компании+партнёры+мастера {s['limit_cold']}, "
+            f"YouTube {s.get('limit_yt', 20)}, дожимы {s['limit_fu']} (меняются в ⚙️ Настройки).\n"
             "На ответ клиента бот пишет только «Секундочку, сейчас вернусь», дальше ведёшь ты.")
     kb = [[{"text": f"{name} {'✅' if s.get(k, True) else '❌'}", "callback_data": f"bot:{k}"}] for k, name, _ in BOTS]
     kb.append([{"text": "✅ Включить все", "callback_data": "bot:all_on"}, {"text": "⏸ Выключить все", "callback_data": "bot:all_off"}])
@@ -353,7 +359,7 @@ def run_analysis(ctl, days=7, intro=""):
 
 HELP = ("Пульт поиска клиентов 🎬\n\n"
         f"{B_ALL} — одной кнопкой включить все боты и нейросеть и запустить поиск\n"
-        f"{B_BOTS} — включить/выключить бота 1 (вакансии), 2 (компании), 3 (партнёры)\n"
+        f"{B_BOTS} — включить/выключить бота 1 (вакансии и эксперты), 2 (компании), 3 (партнёры), 4 (мастера), 5 (YouTube)\n"
         f"{B_ANALYZE} — нейросеть разбирает цифры всех ботов и предлагает, что поменять (применяется кнопкой)\n"
         f"{B_START} / {B_STOP} — включить / выключить поиск\n"
         f"{B_STATUS} — что происходит прямо сейчас и итоги дня\n"
